@@ -1,0 +1,21 @@
+{
+  "name": "roofline",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "inspect": "node tools/inspect-pdf.mjs",
+    "build:sw": "node tools/build-sw.mjs",
+    "serve": "python3 -m http.server 8123",
+    "e2e": "node tests/e2e/run-e2e.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "pdfjs-dist": "^4.10.38",
+    "playwright": "^1.56.1"
+  },
+  "type": "module"
+}
