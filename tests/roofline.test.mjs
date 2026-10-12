@@ -123,7 +123,7 @@ test('calibration maths: measure tool returns the known length within 1mm', () =
 test('calibration on synthetic drawings: known features measure correctly within 1mm', async () => {
   const { floor, roof, floorCal, roofCal } = await calibratedSynthetic();
   const sc = buildScene({ extract: floor, cal: floorCal }, { extract: roof, cal: roofCal }, { handing: 'As', plot: 30 });
-  const ridge = sc.roof.groups.find((g) => g.category === 'ridge');
+  const ridge = sc.roof.groups.find((g) => g.lw === 0.5); // ridge + hips layer
   // longest horizontal ridge segment = W - D = 4236 mm
   let best = 0;
   for (let i = 0; i < ridge.segs.length; i += 4) {
@@ -232,4 +232,34 @@ test('automatic plan area covers the building but excludes the title block', asy
     assert.ok(c.x1 < 1190.55 - 260, `crop stops before the title block (x1=${c.x1})`);
   }
   assert.ok(floor.autoCrop.x0 < outer.x0 && floor.autoCrop.x1 > outer.x1);
+});
+
+test('snapping finds the crossing of a dimension line and its extension line', async () => {
+  const { snapNear } = await import('../js/geom.js');
+  // dimension line overshoots the extension line (as on the real Ellerton drawings)
+  const segs = [380.129, 712.8, 695.489, 712.8, /* extension */ 383.009, 700, 383.009, 720];
+  const hit = snapNear(segs, { x: 382, y: 713 }, 3);
+  assert.equal(hit.type, 'cross');
+  assert.ok(Math.abs(hit.x - 383.009) < 1e-9 && Math.abs(hit.y - 712.8) < 1e-9);
+  // far from the crossing, near the overshooting end: snaps to the end
+  assert.equal(snapNear(segs, { x: 380.2, y: 712.9 }, 1).type, 'end');
+});
+
+test('markup slash lists: ranges, joined wraps, and unknown plot numbers are flagged', async () => {
+  const { parsePlotList, plotNoteVisibility } = await import('../js/text.js');
+  const n = parsePlotList('20K vent 16/17/26/27/66/67/75/76/82/83/110-113/125');
+  assert.deepEqual(n.plots, [16, 17, 26, 27, 66, 67, 75, 76, 82, 83, 110, 111, 112, 113, 125]);
+  const known = new Set(Array.from({ length: 181 }, (_, i) => i + 1));
+  assert.equal(plotNoteVisibility(n, 30, known), 'hide');
+  assert.equal(plotNoteVisibility(n, 112, known), 'show');
+  const typo = parsePlotList('20K vent 16/17/26/27/30/31/71/72/66/67/75/756/82/83/110-113/124/125/133/134');
+  assert.equal(plotNoteVisibility(typo, 30, known), 'warn', '756 is not a plot: warn, never silently filter');
+});
+
+test('one house type can serve several drawing codes (still needs code AND name)', async () => {
+  const s = await syntheticSchedule();
+  const multi = { id: 'm', name: 'ELLERTON', aliases: ['Ellerton Elder'], drawingCode: 'BELX 2401 AA04, BELX 2401 AA05' };
+  assert.equal(resolvePlot(1, s, [multi]).status, 'ok'); // AA05 plot
+  assert.equal(resolvePlot(30, s, [multi]).status, 'ok'); // AA04 plot
+  assert.equal(resolvePlot(62, s, [multi]).status, 'no-drawing'); // AA00 not listed
 });

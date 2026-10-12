@@ -111,7 +111,7 @@ try {
   await page.waitForTimeout(100);
   await shot('04-cal-roof-scale');
   const roofReadout = await page.locator('#app').innerText();
-  if (!/Both snapped/.test(roofReadout)) fail('roof points not snapped');
+  if (!/A snapped to a line (end|crossing), B snapped to a line (end|crossing)/.test(roofReadout)) fail('roof points not snapped');
   if (!/Matches the stated scale 1:50/.test(roofReadout)) fail('roof scale check: ' + roofReadout.slice(-600));
   await page.getByRole('button', { name: 'Next ›' }).click();
   await zoomAround(plate.x0, plate.y0, 1);

@@ -40,10 +40,24 @@ function findHeader(items) {
     else cols.push({ x0, x1, parts: [it] });
   }
   cols.sort((a, b) => a.x0 - b.x0);
+  // Header text ABOVE the PLOT line (multi-line headers like "GARAGE POWER / & LIGHTING"):
+  // attach an item only if it sits over exactly one column; wider group headings are skipped.
+  const above = items.filter((it) => it.y < plotItem.y - 0.3 * size && it.y > plotItem.y - 3.2 * size);
+  for (const it of above) {
+    const hits = cols.filter((c) => it.x < c.x1 + 0.5 && it.x + it.w > c.x0 - 0.5);
+    if (hits.length === 1) hits[0].parts.push(it);
+  }
   const columns = cols.map((c) => ({
     name: c.parts.sort((a, b) => a.y - b.y || a.x - b.x).map((p) => p.str.trim()).join(' ').replace(/\s+/g, ' ').toUpperCase(),
     x0: c.x0, x1: c.x1,
   }));
+  // duplicate header names (e.g. ROOF FINISH for house and garage) must not overwrite each other
+  const seen = new Map();
+  for (const c of columns) {
+    const n = (seen.get(c.name) || 0) + 1;
+    seen.set(c.name, n);
+    if (n > 1) c.name = `${c.name} (${n})`;
+  }
   // boundaries halfway between one header's end and the next header's start
   for (let i = 0; i < columns.length; i++) {
     columns[i].left = i === 0 ? -Infinity : (columns[i - 1].x1 + columns[i].x0) / 2;
@@ -68,7 +82,11 @@ export function parseSchedule(pages) {
   const rows = [];
   const warnings = [];
   let columnNames = null;
-  pages.forEach((rawItems, pi) => {
+  pages.forEach((page, pi) => {
+    // a page is either an item array, or { items, rules } where rules are the y values of
+    // horizontal table lines (row boundaries) taken from the PDF's vector paths
+    const rawItems = Array.isArray(page) ? page : page.items;
+    const rules = Array.isArray(page) ? [] : (page.rules || []);
     const items = rawItems.filter((it) => it.str && it.str.trim() && Math.abs(it.angle || 0) < 0.01);
     const hdr = findHeader(items);
     if (!hdr) { warnings.push(`Page ${pi + 1}: no "PLOT NO" header found - page skipped.`); return; }
@@ -86,20 +104,30 @@ export function parseSchedule(pages) {
     const top = anchors[0].y - 0.8 * pitch;
     const bottom = anchors[anchors.length - 1].y + 1.6 * pitch;
     const pageRows = anchors.map((a) => ({ anchor: a, cellItems: hdr.columns.map(() => []), uncertain: [] }));
+    // Row bands from ruling lines: usable only if every anchor sits in its own band.
+    const bandOf = (y) => { let i = 0; while (i < rules.length && rules[i] < y) i++; return i; };
+    const anchorBands = anchors.map((a) => bandOf(a.y));
+    const useRules = rules.length > anchors.length && new Set(anchorBands).size === anchors.length;
+    if (rules.length && !useRules) warnings.push(`Page ${pi + 1}: table lines found but they do not separate every plot row - using text spacing instead (check wrapped rows).`);
     for (const L of clusterLines(body)) {
       if (L.y < top || L.y > bottom) continue;
-      // nearest anchor by baseline distance
       let best = 0;
-      let bd = Infinity;
-      let second = Infinity;
-      anchors.forEach((a, i) => {
-        const d = Math.abs(a.y - L.y);
-        if (d < bd) { second = bd; bd = d; best = i; } else if (d < second) second = d;
-      });
-      const row = pageRows[best];
-      if (bd > 0.3 * hdr.size && second < Infinity && bd / second > 0.7) {
-        row.uncertain.push(`Text "${L.items.map((i) => i.str).join(' ').slice(0, 40)}" is about equally close to two rows`);
+      if (useRules) {
+        best = anchorBands.indexOf(bandOf(L.y));
+        if (best < 0) continue; // between the table and something else (header/footer band)
+      } else {
+        // nearest anchor by baseline distance
+        let bd = Infinity;
+        let second = Infinity;
+        anchors.forEach((a, i) => {
+          const d = Math.abs(a.y - L.y);
+          if (d < bd) { second = bd; bd = d; best = i; } else if (d < second) second = d;
+        });
+        if (bd > 0.3 * hdr.size && second < Infinity && bd / second > 0.7) {
+          pageRows[best].uncertain.push(`Text "${L.items.map((i) => i.str).join(' ').slice(0, 40)}" is about equally close to two rows`);
+        }
       }
+      const row = pageRows[best];
       for (const it of L.items) {
         if (it === row.anchor) continue;
         const ci = colIndexFor(hdr.columns, it);

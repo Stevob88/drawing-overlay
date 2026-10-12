@@ -2,6 +2,9 @@
 import { parseHanding } from './schedule.js';
 
 export const normCode = (s) => (s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+/** A house type can cover several drawing codes when the same drawings serve them,
+ * e.g. "BELX 2401 AA04, BELX 2401 AA05" (variant differences are in plot-filtered notes). */
+export const codesOf = (h) => (h.drawingCode || '').split(/[,;]/).map((c) => c.trim()).filter(Boolean);
 export const normName = (s) => (s || '').toUpperCase().replace(/^THE\s+/, '').replace(/[^A-Z0-9]/g, '');
 
 /**
@@ -28,7 +31,7 @@ export function resolvePlot(plotNo, schedule, houseTypes) {
   };
   if (!handing) return { status: 'bad-row', ...info, warnings: [...warnings, `Handing "${info.handingRaw}" for plot ${plotNo} is not As or Opp. Mirroring cannot be decided. Fix the schedule row.`] };
   if (!code) return { status: 'bad-row', ...info, warnings: [...warnings, `No drawing code in column "${m.codeCol}" for plot ${plotNo}.`] };
-  const byCode = houseTypes.filter((h) => normCode(h.drawingCode) === normCode(code));
+  const byCode = houseTypes.filter((h) => codesOf(h).some((c) => normCode(c) === normCode(code)));
   const matches = byCode.filter((h) => [h.name, ...(h.aliases || [])].some((n) => normName(n) === normName(name)));
   if (matches.length === 1) return { status: 'ok', ...info, houseType: matches[0], warnings };
   if (matches.length > 1) return { status: 'ambiguous', ...info, candidates: matches, warnings: [...warnings, `${matches.length} imported house types match code ${code} and name ${name}.`] };

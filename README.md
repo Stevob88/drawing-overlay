@@ -70,6 +70,35 @@ Precision tapping: in point mode, drag one finger. The orange crosshair sits **a
 finger, a 4× loupe shows the spot, and on vector drawings it snaps to line ends (green
 SNAP). Lift to place. Two fingers pan and zoom.
 
+## What we learned from the real Ellerton drawings
+
+Checked on the `Elder (End) - TF` roof plan and first floor plan, and on the
+site variation sheet:
+
+- Both drawings are **vector** at a stated 1:50 on A3. They share one template, so the
+  roof and floor plans line up once each is calibrated on the same corner.
+- **Dimension lines overshoot.** On these CAD sheets the dimension line runs about 1 mm
+  on paper past each measured point. Calibrate by snapping to where the **extension line
+  crosses** the dimension line: the loupe shows `SNAP ✕`. Using the dimension line's end
+  instead gives 1:49.09, a 1.8% error, and the app warns you.
+- Calibrating on the 10436 overall depth (crossings) gives exactly 1:50.00 on both
+  sheets. Top-left masonry corner as the reference on both, offset 0,0. The 5461 width
+  then measures 5461 mm (0.4 mm out). The PDF coordinates themselves are only good to
+  about ±1 mm at full size.
+- **Vent and PV notes are PDF markups** (comments added in a PDF editor), not CAD text.
+  The app reads their full text, so `75/7` + `6/82` reads as 76. A plot number not in the
+  schedule (the roof plan has `756`) turns the note into a warning, never a silent filter.
+- These drawings serve **two variants**: `BELX 2401 AA04` (plots 30, 31, 82, 83, 110–113)
+  and `BELX 2401 AA05` (16, 17, 26, 27, 66, 67, 71, 72, 75, 76, 124, 125, 133, 134). The
+  differences between them are in the plot-filtered notes. Enter both codes on one house
+  type: `BELX 2401 AA04, BELX 2401 AA05`. `BELX 2403 AA05` (plots 7, 9, 48, 50) needs its
+  own drawings.
+- Most lines are the same 0.24pt black, so the floor plan shows walls (grey layer and black
+  poché) in strong blue and everything else faint. Windows are in the faint layer.
+- The house roof finish column holds a key letter (e.g. `B`), not a description.
+
+`npm run e2e:real` repeats this whole check on the real files in `tests/fixtures/real/`.
+
 ## Adding more house types
 
 Do not do this until the Ellerton prototype has been checked with a tape on a real plot.

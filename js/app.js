@@ -4,10 +4,10 @@ import { getDrawing, renderRegion, inspectBytes, textPages, tint } from './pdfdo
 import { Viewer } from './viewer.js';
 import { drawScene, drawDrawing, drawScaleBar, PALETTES } from './render.js';
 import { buildScene, sceneBounds, groupVisible, TEXT_DEFAULTS } from './scene.js';
-import { CATEGORIES, describeGroup, snapPoints, defaultVisible } from './classify.js';
-import { resolvePlot } from './lookup.js';
+import { CATEGORIES, describeGroup, defaultVisible } from './classify.js';
+import { resolvePlot, codesOf, normCode } from './lookup.js';
 import { parseSchedule, validateRows, flagRows, guessMapping } from './schedule.js';
-import { scaleFromPoints, makeTransform, errorEstimate, nearestSnap, pointSegDist, mmPerUnitForScale, dist, angleDiffDeg, lineAngleDeg } from './geom.js';
+import { scaleFromPoints, makeTransform, errorEstimate, snapNear, pointSegDist, mmPerUnitForScale, dist, angleDiffDeg, lineAngleDeg } from './geom.js';
 import { renderExport, exportPng, exportPdf, saveBlob, NOTICE } from './export.js';
 
 const $app = document.getElementById('app');
@@ -153,7 +153,7 @@ async function loadScene(ht, floor, cal, handing, plot) {
   const scene = buildScene(
     { extract: fM, cal: cal.floor, settings: layerSettings(ht, floor) },
     { extract: rM, cal: { ...cal.roof, offset: cal.offset }, settings: layerSettings(ht, 'roof') },
-    { handing, plot },
+    { handing, plot, knownPlots: new Set((state.schedule?.rows || []).map((r) => r.plot)) },
   );
   for (const [role, b] of Object.entries(bitmaps)) {
     if (b.limited) scene.warnings.push(`${role} plan rendered at only ${b.dpi.toFixed(0)} DPI (phone canvas limit). Set a smaller plan area in the layer picker to get 300 DPI.`);
@@ -162,9 +162,10 @@ async function loadScene(ht, floor, cal, handing, plot) {
 }
 
 function sceneSnap(scene) {
-  const pts = [];
-  for (const L of [scene.floor, scene.roof]) for (const g of L.groups) for (const v of g.segs) pts.push(v);
-  return (w, r) => nearestSnap(pts, w, r);
+  const segs = [];
+  for (const L of [scene.floor, scene.roof]) for (const g of L.groups) if (g.category !== 'context') for (const v of g.segs) segs.push(v);
+  const flat = Float64Array.from(segs);
+  return (w, r) => snapNear(flat, w, r);
 }
 
 /** Error estimate of a stored per-drawing calibration (mm per point / scale %). */
@@ -556,7 +557,7 @@ async function importScreen(id) {
     msg('info', 'PDFs are read on this phone only. Each page is inspected (vector or raster, text, room names) before you use it.'),
     h('label', null, 'House type name (as in the schedule "house type" column)'), name,
     h('label', null, 'Other names that match (comma separated, e.g. sales name)'), aliases,
-    h('label', null, 'Drawing code (must match the schedule code column exactly, e.g. BELX 2401 AA04)'), code,
+    h('label', null, 'Drawing code(s) - must match the schedule code column. If these drawings serve several variants, list them all, comma separated (e.g. BELX 2401 AA04, BELX 2401 AA05)'), code,
     h('p', { class: 'muted' }, 'A plot only uses these drawings when BOTH the code and one of the names match its schedule row.'),
     slotBox('roof'), FLOORS.map(slotBox),
     h('button', {
@@ -566,8 +567,9 @@ async function importScreen(id) {
         ht.aliases = aliases.value.split(',').map((s) => s.trim()).filter(Boolean);
         ht.drawingCode = code.value.trim();
         if (!ht.name || !ht.drawingCode) { toast('Name and drawing code are required'); return; }
-        const clash = state.houseTypes.find((x) => x.id !== ht.id && x.drawingCode.replace(/\W/g, '').toUpperCase() === ht.drawingCode.replace(/\W/g, '').toUpperCase() && x.name.toUpperCase() === ht.name.toUpperCase());
-        if (clash) { toast('A house type with this name and code already exists'); return; }
+        const mine = codesOf(ht).map(normCode);
+        const clash = state.houseTypes.find((x) => x.id !== ht.id && x.name.toUpperCase() === ht.name.toUpperCase() && codesOf(x).some((c) => mine.includes(normCode(c))));
+        if (clash) { toast(`${clash.name} ${clash.drawingCode} already uses one of these codes`); return; }
         for (const [slot, p] of Object.entries(pending)) {
           const pg = p.report.pages.find((x) => x.page === p.page);
           ht.drawings[slot] = { fileId: p.fileId, fileName: p.fileName, page: p.page, method: pg.method, report: pg, importedAt: new Date().toISOString() };
@@ -619,6 +621,7 @@ async function calibrateScreen(id, floor) {
   const panel = h('div');
   const stepsBar = h('div', { class: 'steps' });
   let overlayScene = null;
+  const snapCache = { key: null, segs: null };
   let overlayBitmaps = {};
   let checkPts = [];
 
@@ -652,7 +655,15 @@ async function calibrateScreen(id, floor) {
       if (st.which === 'overlay') return overlayScene ? sceneSnap(overlayScene)(w, r) : null;
       const m = models[st.which];
       if (m.method === 'B') return null;
-      return nearestSnap(snapPoints(m.groups, snapAll ? null : visibleFor(st.which)), w, r);
+      const key = `${st.which}:${snapAll}`;
+      if (snapCache.key !== key) {
+        const vis = visibleFor(st.which);
+        const segs = [];
+        for (const g of m.groups) if (snapAll || vis(g)) for (const v of g.segs) segs.push(v);
+        snapCache.key = key;
+        snapCache.segs = Float64Array.from(segs);
+      }
+      return snapNear(snapCache.segs, w, r);
     },
     onPoint: (w, info) => {
       const st = STEPS[step];
@@ -666,7 +677,8 @@ async function calibrateScreen(id, floor) {
       }
       const m = models[st.which];
       const renderUpp = underlays[st.which]?.unitsPerPx || 0;
-      const err = info.snapped ? 0.02 : Math.max(1.5 / info.s, renderUpp / 2);
+      // snapped: PDF coordinates are quantised (~0.06pt on Ghostscript output), else tap precision
+      const err = info.snapped ? 0.06 : Math.max(1.5 / info.s, renderUpp / 2);
       const c = d[st.which];
       const p = { x: w.x, y: w.y };
       if (st.key.endsWith('Ref')) { c.ref = p; c.refErr = err; c.refSnapped = info.snapped; }
@@ -674,6 +686,7 @@ async function calibrateScreen(id, floor) {
         c[target] = p;
         c[target + 'Err'] = err;
         c[target + 'Snapped'] = info.snapped;
+        c[target + 'SnapType'] = info.snapType;
         if (target === 'p1') target = 'p2';
         c.pointErrUnits = Math.max(c.p1Err ?? 0, c.p2Err ?? 0);
         if (m.method === 'B') c.pointErrUnits = Math.max(c.pointErrUnits, m.raster?.unitsPerPx ? m.raster.unitsPerPx / 2 : 0);
@@ -702,17 +715,20 @@ async function calibrateScreen(id, floor) {
     const m = models[which];
     if (!(c.p1 && c.p2)) return h('p', { class: 'muted' }, `Place point ${c.p1 ? 'B' : 'A'}.`);
     const du = dist(c.p1, c.p2);
-    const out = [h('p', null, `A–B on drawing: ${fmt(du, 3)} pt (${fmt(du * 25.4 / 72, 2)} mm on paper), angle ${fmt(lineAngleDeg(c.p1, c.p2), 3)}°. ${c.p1Snapped && c.p2Snapped ? 'Both snapped to line ends.' : 'Not snapped: zoom in further for accuracy.'}`)];
+    const how = (t) => (t === 'cross' ? 'a line crossing' : t === 'end' ? 'a line end' : 'nothing (free tap)');
+    const out = [h('p', null, `A–B on drawing: ${fmt(du, 3)} pt (${fmt(du * 25.4 / 72, 2)} mm on paper), angle ${fmt(lineAngleDeg(c.p1, c.p2), 3)}°. A snapped to ${how(c.p1SnapType)}, B snapped to ${how(c.p2SnapType)}.`)];
+    if (c.p1SnapType === 'end' || c.p2SnapType === 'end') out.push(msg('warn', 'A point is on a line END. On CAD dimensions the dimension line usually runs past the measured point: place A and B where the extension line CROSSES the dimension line (loupe shows "SNAP ✕").'));
     if (c.realMm > 0) {
       const k = scaleFromPoints(c.p1, c.p2, c.realMm);
       const N = k / mmPerUnitForScale(1);
       out.push(h('p', { class: 'big' }, `Scale: 1:${fmt(N, 2)} (${fmt(k, 4)} mm per pt)`));
       const stated = m.report.statedScales || [];
+      const hint = ' Tip: on CAD dimensions snap to where the extension line crosses the dimension line, not the end of the dimension line.';
       if (stated.length) {
         const best = stated.reduce((a, b) => (Math.abs(b - N) < Math.abs(a - N) ? b : a));
         const dev = (N / best - 1) * 100;
         out.push(Math.abs(dev) > 0.5
-          ? msg('warn', `Drawing says 1:${best} but your calibration gives 1:${fmt(N, 2)} (${fmt(dev, 2)}% off). Check the points and the value you typed, or the PDF is not to scale.`)
+          ? msg('warn', `Drawing says 1:${best} but your calibration gives 1:${fmt(N, 2)} (${fmt(dev, 2)}% off). Check the points and the value you typed, or the PDF is not to scale.${hint}`)
           : msg('ok', `Matches the stated scale 1:${best} within ${fmt(Math.abs(dev), 3)}%.`));
       } else out.push(msg('info', 'No stated scale (1:N) found in the drawing text to cross-check against.'));
       const e = errorEstimate({ k, lengthUnits: du, pointErrUnits: c.pointErrUnits ?? 0.5, imagePxUnits: m.method === 'B' ? (m.raster?.unitsPerPx || underlays[which]?.unitsPerPx || 0) : 0 });

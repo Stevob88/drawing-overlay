@@ -44,9 +44,13 @@ const ROOM = /^(BED(ROOM)?\s*\d+|MASTER\s+BED(ROOM)?|BATH(ROOM)?|EN[\s-]?SUITE|L
 const DIM = /^[\d\s.,x×()-]*\d{2,}[\d\s.,x×()-]*$/;
 const ROOFNOTE = /\b(TV|tile\s*vents?|vents?|RWP|SVP|truss(es|ed)?|ridge|hips?|valleys?|soakers?|flue|dry\s*verge|eaves|gutter|solar|PV|loft\s*hatch|tank|velux|rooflight)\b/i;
 
+/** Three or more 1-3 digit numbers separated by "/" or "," (e.g. 16/17/26 or 30, 31, 82). */
+export const LIST_RE = /(?:^|[^\d.])\d{1,3}\s*[\/,]\s*\d{1,3}\s*[\/,]\s*\d{1,3}(?![\d.])/;
+
 export function classifyText(str) {
   const s = str.trim();
-  if (/\bplots?\b/i.test(s) && /\d/.test(s)) return 'plotnote';
+  if (/\bplots?\b/i.test(s) && (/\d/.test(s) || /\bplots?\s*[:\-–]?\s*$/i.test(s))) return 'plotnote';
+  if (LIST_RE.test(s)) return 'plotnote';
   if (ROOM.test(s) && s.length <= 30) return 'room';
   if (DIM.test(s)) return 'dim';
   if (/\b1\s*:\s*\d{1,4}\b/.test(s)) return 'scale';
@@ -57,34 +61,40 @@ export function classifyText(str) {
 const JOINERS = new Set(['and', '&', 'to', 'only', 'incl', 'incl.', 'inclusive', 'nos', 'nos.', 'no', 'no.', 'plot', 'plots']);
 
 /**
- * Parse a plot list from a note, e.g. "Rad position to plots: 30, 31, 82-84 & 110".
- * Returns { plots: number[], uncertain: bool, reason } or null if the text has no plot list.
+ * Parse a plot list from a note, e.g. "Rad position to plots: 30, 31, 82-84 & 110" or
+ * "20K vent 16/17/26/27/110-113/124". Returns { plots, uncertain, reason } or null.
  */
 export function parsePlotList(str) {
-  const m = str.match(/\bplots?\b\s*(?:nos?\.?)?\s*[:\-–]?\s*(.*)$/i);
-  if (!m) return null;
-  const tail = m[1];
-  const toks = tail.split(/[\s,;]+/).filter(Boolean);
+  const norm = str.replace(/(\d)\s*[-–]\s*(\d)/g, '$1-$2');
+  let tail;
+  const m = norm.match(/\bplots?\b\s*(?:nos?\.?)?\s*[:\-–]?\s*(.*)$/i);
+  if (m) tail = m[1];
+  else {
+    const k = norm.search(LIST_RE);
+    if (k < 0) return null;
+    tail = norm.slice(k).replace(/^[^\d]+/, '');
+  }
+  const toks = tail.split(/[\s,;\/]+/).filter(Boolean);
   const plots = [];
   let uncertain = false;
-  let reason = '';
+  const reasons = [];
   let i = 0;
   let stoppedAt = -1;
   while (i < toks.length) {
     const t = toks[i].replace(/[.)]$/, '');
-    const range = t.match(/^(\d{1,3})[-–](\d{1,3})$/);
+    const range = t.match(/^(\d{1,4})-(\d{1,4})$/);
     if (range) {
       const a = +range[1];
       const b = +range[2];
-      if (b < a || b - a > 60) { uncertain = true; reason = `Odd range "${t}"`; }
+      if (b < a || b - a > 60) { uncertain = true; reasons.push(`odd range "${t}"`); }
       else for (let n = a; n <= b; n++) plots.push(n);
       i++; continue;
     }
-    if (/^\d{1,3}$/.test(t)) {
-      if (toks[i + 1]?.toLowerCase() === 'to' && /^\d{1,3}$/.test(toks[i + 2] ?? '')) {
+    if (/^\d{1,4}$/.test(t)) {
+      if (toks[i + 1]?.toLowerCase() === 'to' && /^\d{1,4}$/.test(toks[i + 2] ?? '')) {
         const a = +t;
         const b = +toks[i + 2];
-        if (b < a || b - a > 60) { uncertain = true; reason = `Odd range "${t} to ${toks[i + 2]}"`; }
+        if (b < a || b - a > 60) { uncertain = true; reasons.push(`odd range "${t} to ${toks[i + 2]}"`); }
         else for (let n = a; n <= b; n++) plots.push(n);
         i += 3; continue;
       }
@@ -96,10 +106,10 @@ export function parsePlotList(str) {
   }
   if (stoppedAt >= 0) {
     const rest = toks.slice(stoppedAt).join(' ');
-    if (/\d/.test(rest)) { uncertain = true; reason = `Unparsed numbers after the list: "${rest}"`; }
+    if (/\d/.test(rest)) { uncertain = true; reasons.push(`unread text after the list: "${rest.slice(0, 40)}"`); }
   }
-  if (!plots.length) { uncertain = true; reason = reason || 'Mentions plots but no plot numbers could be read'; }
-  return { plots: [...new Set(plots)], uncertain, reason };
+  if (!plots.length) { uncertain = true; reasons.push('mentions plots but no plot numbers could be read'); }
+  return { plots: [...new Set(plots)], uncertain, reason: reasons.join('; ') };
 }
 
 /**
@@ -111,6 +121,12 @@ export function extractPlotNotes(lines) {
   const used = new Set();
   lines.forEach((L, i) => {
     if (used.has(i) || L.cls !== 'plotnote') return;
+    if (L.source === 'markup') { // markups carry their full text already
+      used.add(i);
+      const parsed = parsePlotList(L.str);
+      if (parsed) out.push({ str: L.str, lineIdx: [i], ...parsed, cx: L.cx, cy: L.cy, source: 'markup' });
+      return;
+    }
     let str = L.str;
     const idx = [i];
     let last = L;
@@ -118,11 +134,12 @@ export function extractPlotNotes(lines) {
     for (;;) {
       const nextI = lines.findIndex((M, j) => !used.has(j) && !idx.includes(j) &&
         Math.abs(M.angle - last.angle) < 0.02 && Math.abs(M.size - last.size) < 0.3 * last.size &&
-        M.y > last.y && M.y - last.y < 1.9 * last.size && Math.abs(M.x - L.x) < 40 * last.size &&
-        /^[\d\s,&\-–.]+(and[\d\s,&\-–.]*)*$/i.test(M.str));
+        M.y > last.y && M.y - last.y < 1.9 * last.size && Math.abs(M.x - L.x) < 1.2 * last.size &&
+        /^[\d\s,\/&\-–.]+(and[\d\s,\/&\-–.]*)*$/i.test(M.str) &&
+        (/[,\/]/.test(M.str) || /[,\/\-–]\s*$/.test(last.str)));
       if (nextI < 0) break;
       idx.push(nextI);
-      str += ' ' + lines[nextI].str;
+      str += (/[\/\-–]\s*$/.test(str) ? '' : ' ') + lines[nextI].str;
       last = lines[nextI];
     }
     idx.forEach((j) => used.add(j));
@@ -132,8 +149,16 @@ export function extractPlotNotes(lines) {
   return out;
 }
 
-/** Decide visibility of a plot note for the selected plot. */
-export function plotNoteVisibility(note, plot) {
+/**
+ * Decide visibility of a plot note for the selected plot. knownPlots (optional Set of the
+ * schedule's plot numbers) catches typos such as "756" on a 181-plot site.
+ */
+export function plotNoteVisibility(note, plot, knownPlots) {
   if (note.uncertain) return 'warn';
+  if (knownPlots?.size && note.plots.some((p) => !knownPlots.has(p))) return 'warn';
   return note.plots.includes(plot) ? 'show' : 'hide';
+}
+
+export function unknownPlots(note, knownPlots) {
+  return knownPlots?.size ? note.plots.filter((p) => !knownPlots.has(p)) : [];
 }

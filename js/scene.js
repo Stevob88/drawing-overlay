@@ -2,7 +2,7 @@
 // Pure: no DOM. The same function feeds the screen, the export and the tests.
 import { makeTransform, mirrorX, angleDiffDeg, lineAngleDeg } from './geom.js';
 import { defaultVisible } from './classify.js';
-import { plotNoteVisibility } from './text.js';
+import { plotNoteVisibility, unknownPlots } from './text.js';
 
 /** Text classes shown by default for each drawing role. */
 export const TEXT_DEFAULTS = {
@@ -53,18 +53,29 @@ export function buildLayer(input, opts) {
     if (!inCrop(crop, L.cx, L.cy)) return;
     const c = T.toWorld(L.cx, L.cy);
     // Text is never mirrored: anchor moves to the mirrored position, glyphs stay readable.
-    texts.push({ str: L.str, x: mx(c.x), y: c.y, angle: normaliseUpright(L.angle), sizeMm: L.size * T.k, cls: L.cls, mirroredGlyphs: false });
+    texts.push({ str: L.str, lines: L.display, x: mx(c.x), y: c.y, angle: normaliseUpright(L.angle), sizeMm: L.size * T.k, cls: L.cls, mirroredGlyphs: false });
   });
   const notes = [];
   if (textVis.plotnote) {
     for (const n of extract.plotNotes || []) {
-      const vis = plotNoteVisibility(n, opts.plot);
-      notes.push({ str: n.str, plots: n.plots, vis, reason: n.reason, role });
-      if (vis === 'hide') continue;
-      if (inCrop(crop, n.cx, n.cy)) {
-        const c = T.toWorld(n.cx, n.cy);
-        texts.push({ str: n.str, x: mx(c.x), y: c.y, angle: 0, sizeMm: (extract.lines[n.lineIdx[0]]?.size || 8) * T.k, cls: 'plotnote', warn: vis === 'warn', mirroredGlyphs: false });
+      // no plot selected (calibration preview, As/Opp test): show notes unfiltered
+      const vis = opts.plot > 0 ? plotNoteVisibility(n, opts.plot, opts.knownPlots) : 'all';
+      const unknown = unknownPlots(n, opts.knownPlots);
+      const reason = [n.reason, unknown.length ? `${unknown.join(', ')} ${unknown.length > 1 ? 'are' : 'is'} not a plot number in the schedule (typo on the drawing?)` : ''].filter(Boolean).join('; ');
+      notes.push({ str: n.str, plots: n.plots, vis, reason, role, source: n.source || 'text' });
+      if (!inCrop(crop, n.cx, n.cy)) continue;
+      const c = T.toWorld(n.cx, n.cy);
+      const first = extract.lines[n.lineIdx[0]];
+      const sizeMm = (first?.size || 8) * T.k;
+      if (vis === 'hide') {
+        // keep a small tag so a vent/PV box on the drawing is never left unexplained
+        texts.push({ str: `✗ not for plot ${opts.plot}`, x: mx(c.x), y: c.y, angle: 0, sizeMm: sizeMm * 0.8, cls: 'plotnote', faint: true, mirroredGlyphs: false });
+        continue;
       }
+      // On the drawing show only the note's label (e.g. "20K vent"); the full list is in the notes panel.
+      const label = noteLabel(n.str);
+      const tag = vis === 'warn' ? `${label}: check list` : label;
+      texts.push({ str: tag, x: mx(c.x), y: c.y, angle: 0, sizeMm: Math.min(sizeMm, 9 * T.k), cls: 'plotnote', warn: vis === 'warn', ok: vis === 'show', faint: vis === 'all', mirroredGlyphs: false });
     }
   }
   if (extract.method === 'B') {
@@ -73,6 +84,13 @@ export function buildLayer(input, opts) {
   }
   if (!(extract.lines || []).length && extract.method !== 'B') warnings.push(`${role} plan: no extractable text, so room names and plot notes are unavailable.`);
   return { role, k: T.k, groups, texts, notes, mirror, warnings, raster: extract.raster ? { ...extract.raster, T, crop: extract.raster.crop || crop } : null };
+}
+
+/** Short label for a plot-list note: the words before the list ("20K vent", "Rad position"). */
+export function noteLabel(str) {
+  const words = str.replace(/\bto\s+plots?\b.*$/i, '').replace(/\bplots?\b.*$/i, '').replace(/[\d\/,&\-–:\s]+$/, '').trim();
+  const head = (words || str.split(/\d/)[0].trim() || 'Plot note');
+  return head.length > 24 ? head.slice(0, 23) + '…' : head;
 }
 
 /** Keep text readable: angles in (-90°, 90°]. */

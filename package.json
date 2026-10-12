@@ -8,7 +8,8 @@
     "inspect": "node tools/inspect-pdf.mjs",
     "build:sw": "node tools/build-sw.mjs",
     "serve": "python3 -m http.server 8123",
-    "e2e": "node tests/e2e/run-e2e.mjs"
+    "e2e": "node tests/e2e/run-e2e.mjs",
+    "e2e:real": "node tests/e2e/run-real.mjs"
   },
   "keywords": [],
   "author": "",

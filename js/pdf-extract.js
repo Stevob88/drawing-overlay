@@ -37,6 +37,36 @@ function bezier(out, x0, y0, x1, y1, x2, y2, x3, y3) {
   }
 }
 
+const segBox = (a) => {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (let i = 0; i < a.length; i += 2) { x0 = Math.min(x0, a[i]); x1 = Math.max(x1, a[i]); y0 = Math.min(y0, a[i + 1]); y1 = Math.max(y1, a[i + 1]); }
+  return { x0, y0, x1, y1 };
+};
+const intersectBox = (a, b) => (!a ? b : { x0: Math.max(a.x0, b.x0), y0: Math.max(a.y0, b.y0), x1: Math.min(a.x1, b.x1), y1: Math.min(a.y1, b.y1) });
+
+/** Clip segments to a box (Liang-Barsky). */
+export function clipSegs(segs, box) {
+  if (!box) return segs;
+  if (box.x1 < box.x0 || box.y1 < box.y0) return [];
+  const out = [];
+  const e = 1e-6;
+  for (let i = 0; i < segs.length; i += 4) {
+    const x1 = segs[i], y1 = segs[i + 1], dx = segs[i + 2] - x1, dy = segs[i + 3] - y1;
+    let t0 = 0, t1 = 1;
+    let ok = true;
+    for (const [p, q] of [[-dx, x1 - box.x0 + e], [dx, box.x1 - x1 + e], [-dy, y1 - box.y0 + e], [dy, box.y1 - y1 + e]]) {
+      if (p === 0) { if (q < 0) { ok = false; break; } continue; }
+      const t = q / p;
+      if (p < 0) { if (t > t1) { ok = false; break; } if (t > t0) t0 = t; }
+      else { if (t < t0) { ok = false; break; } if (t < t1) t1 = t; }
+    }
+    if (!ok) continue;
+    if (t0 === 0 && t1 === 1) out.push(segs[i], segs[i + 1], segs[i + 2], segs[i + 3]);
+    else out.push(x1 + t0 * dx, y1 + t0 * dy, x1 + t1 * dx, y1 + t1 * dy);
+  }
+  return out;
+}
+
 /**
  * Walk the operator list and return painted paths in viewport space (y down, scale 1).
  * Each path: { segs:number[] (x1,y1,x2,y2...), stroke:bool, fill:bool, lw, color, fillColor, dash }
@@ -44,7 +74,14 @@ function bezier(out, x0, y0, x1, y1, x2, y2, x3, y3) {
 export function walkOperators(OPS, ol, viewportTransform) {
   const paths = [];
   const images = [];
-  let gs = { ctm: viewportTransform.slice(), lw: 1, stroke: '#000000', fill: '#000000', dash: '' };
+  // clip = bounding box of the current clipping path (viewport space). Exact for the usual
+  // rectangular clips; for other shapes it keeps a little more than the PDF shows.
+  let gs = { ctm: viewportTransform.slice(), lw: 1, stroke: '#000000', fill: '#000000', dash: '', clip: null };
+  let pendingClip = false;
+  // current point persists across constructPath ops until the path is painted/ended;
+  // null = no current point (a lineTo without one draws nothing, never a line from 0,0)
+  let cur = null;
+  let start = null;
   const stack = [];
   let pending = null; // segments of the current path in viewport space
   const P = OPS;
@@ -63,10 +100,16 @@ export function walkOperators(OPS, ol, viewportTransform) {
       case P.save: stack.push({ ...gs, ctm: gs.ctm.slice() }); break;
       case P.restore: if (stack.length) gs = stack.pop(); break;
       case P.transform: gs.ctm = mul(gs.ctm, args); break;
-      case P.paintFormXObjectBegin:
+      case P.paintFormXObjectBegin: {
         stack.push({ ...gs, ctm: gs.ctm.slice() });
         if (args?.[0]) gs.ctm = mul(gs.ctm, args[0]);
+        const bb = args?.[1]; // a form XObject is clipped to its BBox
+        if (bb && bb.length === 4) {
+          const pts = [[bb[0], bb[1]], [bb[2], bb[1]], [bb[2], bb[3]], [bb[0], bb[3]]].map(([x, y]) => apply(gs.ctm, x, y));
+          gs.clip = intersectBox(gs.clip, segBox(pts.flat()));
+        }
         break;
+      }
       case P.paintFormXObjectEnd: if (stack.length) gs = stack.pop(); break;
       case P.setLineWidth: gs.lw = args[0]; break;
       case P.setDash: gs.dash = (args[0] || []).length ? Array.from(args[0]).map(r2).join(',') : ''; break;
@@ -84,41 +127,57 @@ export function walkOperators(OPS, ol, viewportTransform) {
         const [ops, coords] = args;
         const segs = [];
         let j = 0;
-        let cx = 0, cy = 0, sx = 0, sy = 0;
+        let has = !!cur;
+        let cx = cur ? cur[0] : 0, cy = cur ? cur[1] : 0, sx = start ? start[0] : 0, sy = start ? start[1] : 0;
         const T = (x, y) => apply(gs.ctm, x, y);
         for (const op of ops) {
           if (op === P.moveTo) {
-            [cx, cy] = T(coords[j], coords[j + 1]); sx = cx; sy = cy; j += 2;
+            [cx, cy] = T(coords[j], coords[j + 1]); sx = cx; sy = cy; j += 2; has = true;
           } else if (op === P.lineTo) {
             const [x, y] = T(coords[j], coords[j + 1]); j += 2;
-            segs.push(cx, cy, x, y); cx = x; cy = y;
+            if (has) segs.push(cx, cy, x, y);
+            cx = x; cy = y; if (!has) { sx = x; sy = y; has = true; }
           } else if (op === P.curveTo) {
             const [x1, y1] = T(coords[j], coords[j + 1]);
             const [x2, y2] = T(coords[j + 2], coords[j + 3]);
             const [x3, y3] = T(coords[j + 4], coords[j + 5]); j += 6;
-            bezier(segs, cx, cy, x1, y1, x2, y2, x3, y3); cx = x3; cy = y3;
+            if (has) bezier(segs, cx, cy, x1, y1, x2, y2, x3, y3);
+            cx = x3; cy = y3; if (!has) { sx = x3; sy = y3; has = true; }
           } else if (op === P.curveTo2) { // first control point = current point
             const [x2, y2] = T(coords[j], coords[j + 1]);
             const [x3, y3] = T(coords[j + 2], coords[j + 3]); j += 4;
-            bezier(segs, cx, cy, cx, cy, x2, y2, x3, y3); cx = x3; cy = y3;
+            if (has) bezier(segs, cx, cy, cx, cy, x2, y2, x3, y3);
+            cx = x3; cy = y3; if (!has) { sx = x3; sy = y3; has = true; }
           } else if (op === P.curveTo3) { // second control point = end point
             const [x1, y1] = T(coords[j], coords[j + 1]);
             const [x3, y3] = T(coords[j + 2], coords[j + 3]); j += 4;
-            bezier(segs, cx, cy, x1, y1, x3, y3, x3, y3); cx = x3; cy = y3;
+            if (has) bezier(segs, cx, cy, x1, y1, x3, y3, x3, y3);
+            cx = x3; cy = y3; if (!has) { sx = x3; sy = y3; has = true; }
           } else if (op === P.closePath) {
-            if (cx !== sx || cy !== sy) segs.push(cx, cy, sx, sy);
+            if (has && (cx !== sx || cy !== sy)) segs.push(cx, cy, sx, sy);
             cx = sx; cy = sy;
           } else if (op === P.rectangle) {
             const [x, y, w, h] = [coords[j], coords[j + 1], coords[j + 2], coords[j + 3]]; j += 4;
             const a = T(x, y), b = T(x + w, y), c = T(x + w, y + h), d = T(x, y + h);
             segs.push(a[0], a[1], b[0], b[1], b[0], b[1], c[0], c[1], c[0], c[1], d[0], d[1], d[0], d[1], a[0], a[1]);
-            cx = a[0]; cy = a[1]; sx = cx; sy = cy;
+            cx = a[0]; cy = a[1]; sx = cx; sy = cy; has = true;
           }
         }
+        cur = has ? [cx, cy] : null;
+        start = has ? [sx, sy] : null;
         pending = pending ? pending.concat(segs) : segs;
         break;
       }
-      case P.endPath: pending = null; break;
+      case P.clip:
+      case P.eoClip:
+        pendingClip = true;
+        break;
+      case P.endPath:
+        if (pendingClip && pending?.length) gs.clip = intersectBox(gs.clip, segBox(pending));
+        pendingClip = false;
+        pending = null;
+        cur = null; start = null;
+        break;
       case P.paintImageXObject:
       case P.paintInlineImageXObject:
       case P.paintImageMaskXObject:
@@ -142,13 +201,16 @@ export function walkOperators(OPS, ol, viewportTransform) {
       default:
         if (paintOps.has(fn)) {
           const [s, f] = paintOps.get(fn);
-          if (pending && pending.length) {
+          if (pendingClip && pending?.length) { gs.clip = intersectBox(gs.clip, segBox(pending)); pendingClip = false; }
+          const segs = pending?.length ? clipSegs(pending, gs.clip) : null;
+          if (segs && segs.length) {
             paths.push({
-              segs: pending, stroke: s, fill: f,
+              segs, stroke: s, fill: f,
               lw: r2(gs.lw * scaleOf(gs.ctm)), color: gs.stroke, fillColor: gs.fill, dash: gs.dash,
             });
           }
           pending = null;
+          cur = null; start = null;
         }
     }
   }
@@ -171,6 +233,34 @@ export async function extractText(page, viewport) {
   return items;
 }
 
+/**
+ * Text from PDF markups (FreeText / callout / note comments added in Bluebeam, Acrobat etc).
+ * Their drawn boxes come through the operator list; their text does not, so read it here.
+ * str = the full comment text (authoritative for plot lists: a list that wraps on screen,
+ * e.g. "75/7" + "6/82", is stored unbroken); display = the lines as shown.
+ */
+export async function extractMarkups(page, viewport) {
+  const out = [];
+  let anns = [];
+  try { anns = await page.getAnnotations(); } catch { return out; }
+  for (const a of anns) {
+    if (!['FreeText', 'Text', 'Square', 'Circle', 'Polygon', 'Line'].includes(a.subtype)) continue;
+    const raw = (a.contentsObj?.str ?? a.contents ?? '').trim();
+    if (!raw) continue;
+    const [x0, y0, x1, y1] = viewport.convertToViewportRectangle(a.rect);
+    const display = (Array.isArray(a.textContent) && a.textContent.length ? a.textContent : raw.split(/\r\n|\r|\n/)).map((t) => t.trim()).filter(Boolean);
+    const str = raw.replace(/\s*(\r\n|\r|\n)\s*/g, ' ').replace(/\s+/g, ' ').trim();
+    const h = Math.abs(y1 - y0);
+    const size = Math.max(5, Math.min(14, (h / Math.max(1, display.length)) * 0.75));
+    out.push({
+      str, display, source: 'markup', subtype: a.subtype, cls: classifyText(str),
+      x: Math.min(x0, x1), y: Math.max(y0, y1), angle: 0, size, w: Math.abs(x1 - x0),
+      cx: (x0 + x1) / 2, cy: (y0 + y1) / 2,
+    });
+  }
+  return out;
+}
+
 /** Full vector + text extraction of one page, ready for classification and rendering. */
 export async function extractPage(pdfjs, page) {
   const viewport = page.getViewport({ scale: 1 });
@@ -178,7 +268,9 @@ export async function extractPage(pdfjs, page) {
   const { paths, images } = walkOperators(pdfjs.OPS, ol, viewport.transform);
   const textItems = await extractText(page, viewport);
   const lines = groupTextLines(textItems).map((l) => ({ ...l, cls: classifyText(l.str) }));
-  return { width: viewport.width, height: viewport.height, paths, images, textItems, lines, opCount: ol.fnArray.length };
+  const markups = await extractMarkups(page, viewport);
+  for (const m of markups) lines.push(m);
+  return { width: viewport.width, height: viewport.height, paths, images, textItems, lines, markups: markups.length, opCount: ol.fnArray.length };
 }
 
 const ROOM_RE = /\b(BED(ROOM)?\s*\d|BATH(ROOM)?|EN[\s-]?SUITE|LANDING|WC|CLOAKS?|STUDY|STORE|CUPB(OARD)?|AIRING|KITCHEN|LOUNGE|LIVING|DINING|HALL|UTILITY)\b/i;
@@ -213,6 +305,7 @@ export function inspectExtracted(ex) {
       ? `Only ${segCount} vector segments and ${(imageCoverage * 100).toFixed(0)}% image coverage: not enough vector data to trust. Treating as raster.`
       : `Only ${segCount} vector segments and no images: this page has little or no drawing content (text-only page such as a schedule?). Not usable as a drawing.`);
   }
+  if (ex.markups) reasons.push(`${ex.markups} markup comment(s) with text found (e.g. vent / PV notes added in a PDF editor). Their text is read for plot filtering.`);
   if (!ex.textItems.length) reasons.push('No extractable text. Text may be outlined as paths or part of an image: room names cannot be labelled and plot-list notes cannot be filtered.');
   else reasons.push(`${ex.textItems.length} text items extracted.`);
   const raster = minUnitsPerPx
@@ -248,49 +341,78 @@ export function prepareDrawing(ex, role) {
   const report = inspectExtracted(ex);
   const groups = report.method === 'A' ? buildGroups(ex.paths, role) : [];
   return {
-    role, method: report.method, report, autoCrop: autoCrop(groups, role),
+    role, method: report.method, report, autoCrop: autoCrop(groups, role, ex.width, ex.height),
     width: ex.width, height: ex.height,
     groups, lines: ex.lines, plotNotes: extractPlotNotes(ex.lines),
     raster: report.method === 'B' ? { unitsPerPx: report.raster?.unitsPerPx ?? null } : null,
   };
 }
 
-/** Text items for every page (used by the schedule parser). */
+/**
+ * Text items + horizontal table rules for every page (used by the schedule parser).
+ * Rules = y of horizontal lines (or thin filled bars) spanning >30% of the page width.
+ */
 export async function pdfTextPages(pdfjs, data, opts = {}) {
   const doc = await pdfjs.getDocument({ data: data.slice ? data.slice() : data, ...opts }).promise;
   const pages = [];
   for (let n = 1; n <= doc.numPages; n++) {
     const page = await doc.getPage(n);
-    pages.push(await extractText(page, page.getViewport({ scale: 1 })));
+    const vp = page.getViewport({ scale: 1 });
+    const items = await extractText(page, vp);
+    const { paths } = walkOperators(pdfjs.OPS, await page.getOperatorList(), vp.transform);
+    const ys = [];
+    for (const p of paths) {
+      for (let i = 0; i < p.segs.length; i += 4) {
+        const s = p.segs;
+        if (Math.abs(s[i + 1] - s[i + 3]) < 0.05 && Math.abs(s[i + 2] - s[i]) > 0.3 * vp.width) ys.push(s[i + 1]);
+      }
+    }
+    ys.sort((a, b) => a - b);
+    const rules = [];
+    for (const y of ys) if (!rules.length || y - rules[rules.length - 1] > 0.5) rules.push(y);
+    pages.push({ items, rules });
   }
   return pages;
 }
 
 /**
- * Automatic plan area: the largest connected cluster of wall lines (floor) or roof
- * outline/ridge lines (roof), plus anything inside it, expanded by 15%. Title-block
- * borders drawn in the same line style are separate clusters and are left out.
- * The user can override it in the layer picker.
+ * Automatic plan area: the largest connected cluster of linework on the sheet, ignoring
+ * the sheet border, expanded by 6%, plus any other
+ * cluster lying inside it. Keys, schedules and title blocks are separate clusters and
+ * fall outside. It is a starting point: the user can set the plan area by hand.
  */
-export function autoCrop(groups, role) {
-  const main = role === 'floor' ? ['walls'] : ['outline', 'ridge'];
+export function autoCrop(groups, role, width = Infinity, height = Infinity) {
+  // Ignore the sheet border and anything reaching into the outer 5% margin.
+  const short = Math.min(width, height);
+  const edge = 0.05 * short;
+  const nearEdge = (x, y) => x < edge || y < edge || x > width - edge || y > height - edge;
   const segs = [];
-  for (const g of groups) if (main.includes(g.category) && g.kind === 'stroke') for (const v of g.segs) segs.push(v);
+  for (const g of groups) {
+    if (g.kind !== 'stroke' || g.color === '#ffffff') continue;
+    for (let i = 0; i < g.segs.length; i += 4) {
+      const [x1, y1, x2, y2] = [g.segs[i], g.segs[i + 1], g.segs[i + 2], g.segs[i + 3]];
+      const L = Math.hypot(x2 - x1, y2 - y1);
+      if (L === 0 || L > 0.85 * short) continue;
+      if (nearEdge(x1, y1) || nearEdge(x2, y2)) continue; // border, or stray lines from the sheet corner
+      segs.push(x1, y1, x2, y2);
+    }
+  }
   const n = segs.length / 4;
   if (!n) return null;
-  // union-find over segments sharing an endpoint (1pt tolerance)
   const parent = Array.from({ length: n }, (_, i) => i);
   const find = (i) => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+  // connect segments whose endpoints are within ~1.5pt (grid hashing)
+  const cell = 1.5;
   const at = new Map();
   for (let i = 0; i < n; i++) {
     for (const e of [0, 2]) {
-      const x = segs[i * 4 + e];
-      const y = segs[i * 4 + e + 1];
+      const gx = Math.floor(segs[i * 4 + e] / cell);
+      const gy = Math.floor(segs[i * 4 + e + 1] / cell);
       for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
-        const k = `${Math.round(x) + dx},${Math.round(y) + dy}`;
+        const k = (gx + dx) * 100003 + (gy + dy);
         if (at.has(k)) parent[find(i)] = find(at.get(k));
       }
-      at.set(`${Math.round(x)},${Math.round(y)}`, i);
+      at.set(gx * 100003 + gy, i);
     }
   }
   const comps = new Map();
@@ -305,14 +427,15 @@ export function autoCrop(groups, role) {
   }
   const all = [...comps.values()];
   const big = all.reduce((a, b) => (b.len > a.len ? b : a));
-  const m = 0.15 * Math.max(big.x1 - big.x0, big.y1 - big.y0);
+  const m = 0.06 * Math.max(big.x1 - big.x0, big.y1 - big.y0);
   const box = { x0: big.x0 - m, y0: big.y0 - m, x1: big.x1 + m, y1: big.y1 + m };
-  // include other clusters that sit inside the box (e.g. outer wall line vs inner skin)
   for (const c of all) {
     if (c.x0 >= box.x0 && c.x1 <= box.x1 && c.y0 >= box.y0 && c.y1 <= box.y1) {
       box.x0 = Math.min(box.x0, c.x0 - m); box.x1 = Math.max(box.x1, c.x1 + m);
       box.y0 = Math.min(box.y0, c.y0 - m); box.y1 = Math.max(box.y1, c.y1 + m);
     }
   }
+  box.x0 = Math.max(box.x0, 0); box.y0 = Math.max(box.y0, 0);
+  box.x1 = Math.min(box.x1, width); box.y1 = Math.min(box.y1, height);
   return box;
 }

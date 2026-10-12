@@ -24,25 +24,33 @@ function drawText(ctx, view, t, colour, pal) {
   const px = Math.max(10, Math.min(30, t.sizeMm * view.s));
   const x = t.x * view.s + view.tx;
   const y = t.y * view.s + view.ty;
+  const rows = (t.lines?.length ? t.lines : [t.str]).slice();
+  if (t.warn) rows[0] = '⚠ ' + rows[0];
+  if (t.ok) rows[0] = '✓ ' + rows[0];
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(t.angle || 0); // never a negative scale: glyphs are never mirrored
-  ctx.font = `${t.cls === 'room' ? 'bold ' : ''}${px}px system-ui, -apple-system, sans-serif`;
+  ctx.font = `${t.cls === 'room' || t.ok ? 'bold ' : ''}${px}px system-ui, -apple-system, sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  const label = t.warn ? '⚠ ' + t.str : t.str;
+  const lh = px * 1.15;
+  const y0 = -((rows.length - 1) * lh) / 2;
   if (t.warn) {
-    const w = ctx.measureText(label).width;
+    const w = Math.max(...rows.map((r) => ctx.measureText(r).width));
     ctx.fillStyle = pal.warnBg;
-    ctx.fillRect(-w / 2 - 3, -px * 0.65, w + 6, px * 1.3);
-    ctx.fillStyle = pal.warnInk;
-  } else {
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = pal.halo;
-    ctx.strokeText(label, 0, 0);
-    ctx.fillStyle = colour;
+    ctx.fillRect(-w / 2 - 3, y0 - px * 0.65, w + 6, rows.length * lh + px * 0.2);
   }
-  ctx.fillText(label, 0, 0);
+  if (t.faint) ctx.globalAlpha *= 0.55;
+  rows.forEach((r, k) => {
+    const yy = y0 + k * lh;
+    if (!t.warn) {
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = pal.halo;
+      ctx.strokeText(r, 0, yy);
+    }
+    ctx.fillStyle = t.warn ? pal.warnInk : colour;
+    ctx.fillText(r, 0, yy);
+  });
   ctx.restore();
 }
 
@@ -69,11 +77,16 @@ function drawLayer(ctx, view, layer, colour, pal, o) {
   }
   ctx.strokeStyle = colour;
   ctx.lineCap = 'round';
-  for (const g of layer.groups) {
-    ctx.lineWidth = lwPx(g.lw, g.category);
+  const base = ctx.globalAlpha;
+  // faint context lines first, so walls and roof lines sit on top
+  const order = layer.groups.slice().sort((p, q) => (q.category === 'context') - (p.category === 'context'));
+  for (const g of order) {
+    ctx.globalAlpha = g.category === 'context' ? base * 0.35 : base;
+    ctx.lineWidth = g.category === 'context' ? 0.8 : lwPx(g.lw, g.category);
     ctx.setLineDash(g.category === 'dashed' ? [6, 4] : []);
     strokeSegs(ctx, g.segs, view);
   }
+  ctx.globalAlpha = base;
   ctx.setLineDash([]);
   for (const t of layer.texts) drawText(ctx, view, t, colour, pal);
 }

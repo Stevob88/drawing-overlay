@@ -11,7 +11,7 @@ const OPTS = {
   disableStream: true,
   verbosity: 0,
 };
-const EXTRACT_VERSION = 5; // bump when extraction/classification changes
+const EXTRACT_VERSION = 8; // bump when extraction/classification changes
 
 const docs = new Map();
 export async function openDoc(fileId) {

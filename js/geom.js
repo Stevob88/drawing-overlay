@@ -95,6 +95,50 @@ export function nearestSnap(candidates, p, radius) {
   return best;
 }
 
+/**
+ * Precision snap: line ends AND line crossings near p (within r drawing units).
+ * segs = flat [x1,y1,x2,y2,...]. Crossings matter on CAD drawings, where dimension lines
+ * overshoot the extension lines: the measured point is the crossing, not the line end.
+ * Returns { x, y, d, type: 'end' | 'cross' } or null.
+ */
+export function snapNear(segs, p, r) {
+  const near = [];
+  let best = null;
+  const consider = (x, y, type) => {
+    const d = Math.hypot(x - p.x, y - p.y);
+    // a crossing that coincides with a line end counts as a crossing
+    if (d <= r && (!best || d < best.d - 1e-6 || (type === 'cross' && d <= best.d + 1e-6))) best = { x, y, d, type };
+  };
+  for (let i = 0; i < segs.length; i += 4) {
+    const x1 = segs[i], y1 = segs[i + 1], x2 = segs[i + 2], y2 = segs[i + 3];
+    if (pointSegDist(p.x, p.y, x1, y1, x2, y2) > r) continue;
+    consider(x1, y1, 'end');
+    consider(x2, y2, 'end');
+    if (near.length < 400) near.push(i);
+  }
+  for (let a = 0; a < near.length; a++) {
+    for (let b = a + 1; b < near.length; b++) {
+      const i = near[a], j = near[b];
+      const hit = segIntersect(segs[i], segs[i + 1], segs[i + 2], segs[i + 3], segs[j], segs[j + 1], segs[j + 2], segs[j + 3]);
+      if (hit) consider(hit[0], hit[1], 'cross');
+    }
+  }
+  return best;
+}
+
+/** Intersection of two segments (not parallel), or null. */
+export function segIntersect(x1, y1, x2, y2, x3, y3, x4, y4) {
+  const den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+  const l1 = Math.hypot(x2 - x1, y2 - y1);
+  const l2 = Math.hypot(x4 - x3, y4 - y3);
+  if (!l1 || !l2 || Math.abs(den) < 1e-9 * l1 * l2 * 1e3) return null;
+  const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / den;
+  const u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / den;
+  const eps = 1e-6;
+  if (t < -eps || t > 1 + eps || u < -eps || u > 1 + eps) return null;
+  return [x1 + t * (x2 - x1), y1 + t * (y2 - y1)];
+}
+
 /** Distance from point to segment, used for tap-to-identify line group. */
 export function pointSegDist(px, py, x1, y1, x2, y2) {
   const dx = x2 - x1;

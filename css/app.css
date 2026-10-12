@@ -20,7 +20,8 @@
   --paper: #0b0f14; color-scheme: dark;
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; background: var(--bg); color: var(--ink); }
+html, body { margin: 0; background: var(--bg); color: var(--ink); overflow-x: hidden; }
+#app, .msg, .card, .sheet, p, li, dd { overflow-wrap: anywhere; }
 body {
   font: 17px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   -webkit-text-size-adjust: 100%;

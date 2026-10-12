@@ -117,7 +117,7 @@ export class Viewer {
       ctx.strokeRect(target.x - 7, target.y - 7, 14, 14);
       ctx.fillStyle = '#00b050';
       ctx.font = 'bold 12px system-ui';
-      ctx.fillText('SNAP', lx - 16, ly + LOUPE_R - 10);
+      ctx.fillText(this.snapHit.type === 'cross' ? 'SNAP ✕' : 'SNAP end', lx - 26, ly + LOUPE_R - 10);
     }
     ctx.restore();
   }
@@ -182,7 +182,7 @@ export class Viewer {
       if (this.pointers.size > 0) return;
       if (this.mode === 'point' && this.cross && e.type === 'pointerup') {
         const w = this.snapHit ? { x: this.snapHit.x, y: this.snapHit.y } : this.toWorld(this.cross.x, this.cross.y);
-        const info = { snapped: !!this.snapHit, s: this.view.s };
+        const info = { snapped: !!this.snapHit, snapType: this.snapHit?.type || null, s: this.view.s };
         this.cross = null;
         this.snapHit = null;
         this.redraw();
