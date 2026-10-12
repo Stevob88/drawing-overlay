@@ -14,10 +14,9 @@ After the first load it works offline.
 
 ## Run it
 
-It is a static site with no build step. Serve the `roofline/` folder over HTTP(S):
+It is a static site with no build step. Serve this folder over HTTP(S):
 
 ```bash
-cd roofline
 npm install            # dev tools only: pdfjs-dist (tests/CLI) and playwright (e2e)
 npm run serve          # http://localhost:8123
 npm test               # unit/integration tests (node:test)
@@ -25,10 +24,10 @@ npm run e2e            # full browser run at iPhone size, screenshots in tests/e
 npm run inspect -- some.pdf   # Step 0 report for a PDF, locally
 ```
 
-Hosting: the folder can be served by GitHub Pages. If this repo's Pages site is merged
-to `main`, it appears at `https://nhbc-battle.co.uk/roofline/`. Only the app code is
-public: drawings never leave the phone. The service worker and IndexedDB need HTTPS,
-which GitHub Pages provides.
+Hosting: serve this repository with GitHub Pages (Settings → Pages → deploy from `main`,
+root folder). Only the app code is published: drawings never leave the phone. The service
+worker and IndexedDB need HTTPS, which GitHub Pages provides. On a free GitHub plan, Pages
+needs the repository to be public.
 
 After changing any app file, run `npm run build:sw` so phones pick up the new version.
 
