@@ -18,6 +18,7 @@ let saved = { roof: null, floor: null, align: null, nudge: { x: 0, y: 0 }, opaci
 const dr = { roof: null, floor: null };
 let mode = 'view'; // view | pick-roof | pick-floor | move
 let viewer = null;
+let show = 'both'; // both | roof | floor: which drawings are on screen
 let fullView = false; // drawing fills the whole screen
 
 // ---------------------------------------------------------------- helpers
@@ -159,22 +160,23 @@ function draw(ctx, view, info) {
   ctx.imageSmoothingEnabled = true;
   if (mode === 'pick-roof' && dr.roof) { drawPage(ctx, view, dr.roof, dr.roof.canvas, dpr, [1, 0, 0, 1, 0, 0]); return marks(ctx, view, dpr, saved.align?.roofRef); }
   if (mode === 'pick-floor' && dr.floor) { drawPage(ctx, view, dr.floor, dr.floor.canvas, dpr, [1, 0, 0, 1, 0, 0]); return marks(ctx, view, dpr, saved.align?.floorRef); }
-  if (dr.floor) {
+  const roofAlpha = show === 'roof' ? 1 : saved.opacity; // on its own, the roof is drawn solid
+  if (dr.floor && show !== 'roof') {
     if (showWallsOnly()) drawWalls(ctx, view, dpr);
     else if (showCleanFloor()) drawFloorClean(ctx, view, dpr);
     else drawPage(ctx, view, dr.floor, saved.colour ? dr.floor.tinted : dr.floor.canvas, dpr, [1, 0, 0, 1, 0, 0]);
   }
-  if (dr.roof && showCleanRoof()) drawRoofClean(ctx, view, dpr);
-  else if (dr.roof) {
+  if (dr.roof && show !== 'floor' && showCleanRoof()) drawRoofClean(ctx, view, dpr, roofAlpha);
+  else if (dr.roof && show !== 'floor') {
     const o = roofToFloor(0, 0);
     const k = roofRatio();
     ctx.save();
-    ctx.globalAlpha = saved.opacity;
+    ctx.globalAlpha = roofAlpha;
     ctx.globalCompositeOperation = 'multiply'; // white paper becomes see-through
     drawPage(ctx, view, dr.roof, saved.colour ? dr.roof.tinted : dr.roof.canvas, dpr, [k, 0, 0, k, o.x, o.y]);
     ctx.restore();
   }
-  if (dr.floor && (showWallsOnly() || showCleanFloor())) drawRooms(ctx, view, dpr); // room names on top, never mirrored
+  if (dr.floor && show !== 'roof' && (showWallsOnly() || showCleanFloor())) drawRooms(ctx, view, dpr); // room names on top, never mirrored
   if (saved.align && !info.print) marks(ctx, view, dpr, { x: fx(saved.align.floorRef.x + saved.nudge.x), y: saved.align.floorRef.y + saved.nudge.y });
 }
 
@@ -186,8 +188,8 @@ const lightness = (hex) => rgb(hex).reduce((a, b) => a + b, 0) / 765;
  * Roof plan drawn from its own linework, without dimensions, measurements, title block or
  * keys. Markups (vent / PV boxes and their notes) are always kept.
  */
-function drawRoofClean(ctx, view, dpr) {
-  drawClean(ctx, view, dpr, { data: dr.roof.clean, toFloor: roofToFloor, area: roofArea(), tint: ROOF_TINT, alpha: saved.opacity, k: roofRatio(), notes: true });
+function drawRoofClean(ctx, view, dpr, alpha) {
+  drawClean(ctx, view, dpr, { data: dr.roof.clean, toFloor: roofToFloor, area: roofArea(), tint: ROOF_TINT, alpha, k: roofRatio(), notes: true });
 }
 
 /**
@@ -587,6 +589,7 @@ async function clearAll() {
   }
   saved = { ...saved, roof: null, floor: null, align: null, nudge: { x: 0, y: 0 }, flip: false, scaleOverride: { roof: null, floor: null } };
   mode = 'view';
+  show = 'both';
   scaleBoxOpen = false;
   try { await db.clear('files'); } catch { /* nothing stored */ }
   await save();
@@ -602,8 +605,9 @@ function render() {
   const picking = mode === 'pick-roof' || mode === 'pick-floor';
   const hasDrawing = both || dr.roof || dr.floor;
 
-  const chips = both && !picking ? h('div', { class: 'chips' },
-    saved.colour ? [h('span', { class: 'chip' }, h('i', { class: 'dot floor' }), 'Floor plan'), h('span', { class: 'chip' }, h('i', { class: 'dot roof' }), 'Roof plan')] : h('span', { class: 'chip' }, 'Roof plan on floor plan')) : null;
+  const seg = (val, label, dot) => h('button', { class: show === val ? 'on' : '', 'aria-pressed': String(show === val), onclick: () => { show = val; render(); } }, dot && saved.colour ? h('i', { class: `dot ${dot}` }) : null, label);
+  const chips = both && !picking ? h('div', { class: 'chips showswitch', role: 'group', 'aria-label': 'Show' },
+    seg('both', 'Both'), seg('roof', 'Roof', 'roof'), seg('floor', 'Floor', 'floor')) : null;
 
   const tools = both ? (picking
     ? h('div', { class: 'tools two a-tools' },

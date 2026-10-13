@@ -36,6 +36,22 @@ async function run(label, ctxOpts) {
   await page.waitForSelector('text=Print');
   await page.screenshot({ path: path.join(OUT, `${label}-screen.png`), fullPage: true });
 
+  // show only the roof / only the floor: count red and blue ink on the canvas
+  const ink = () => page.evaluate(() => {
+    const c = window.__roofline.viewer().canvas; const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    let red = 0, blue = 0;
+    for (let i = 0; i < d.length; i += 4) { if (d[i] - d[i + 1] > 50 && d[i] - d[i + 2] > 50 && Math.abs(d[i + 1] - d[i + 2]) < 40) red++; else if (d[i + 2] - d[i] > 60) blue++; }
+    return { red, blue };
+  });
+  for (const [btn, wantRed, wantBlue] of [['Roof', true, false], ['Floor', false, true], ['Both', true, true]]) {
+    await page.getByRole('button', { name: btn, exact: true }).click();
+    await page.waitForTimeout(200);
+    const n = await ink();
+    console.log(`  show ${btn}: red ${n.red}, blue ${n.blue}`);
+    if ((n.red > 500) !== wantRed || (n.blue > 500) !== wantBlue) fail(`show ${btn} wrong`);
+    await page.locator('.canvaswrap').screenshot({ path: path.join(OUT, `${label}-show-${btn}.png`) });
+  }
+
   // download (computer) / share sheet (iPhone)
   if (ctxOpts.hasTouch) {
     await page.evaluate(() => { for (const [k, v] of Object.entries({ canShare: () => true, share: async (d) => { window.__shared = d.files.map((f) => [f.name, f.type, f.size]); } })) Object.defineProperty(Navigator.prototype, k, { value: v, configurable: true }); });
