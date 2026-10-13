@@ -118,3 +118,20 @@ test('REAL roof plan, cleaned: no dimensions, all vent and PV markups kept', { s
   assert.ok(c.notes.some((n) => /20K vent/.test(n.lines.join(' '))));
   assert.ok(!c.notes.some((n) => /^\d+$/.test(n.lines.join('').trim())), 'no bare numbers');
 });
+
+test('measurements are removed automatically on any drawing style (synthetic: thin ticks, no 0.96pt ticks)', async () => {
+  const g = await geometry(path.join(SYN, 'ellerton_first_floor.pdf'));
+  // the 10436 dimension line runs the full width above the house; the 3600 one below it
+  const longDim = g.clean.paths.some((p) => { for (let i = 0; i < p.segs.length; i += 4) if (Math.abs(p.segs[i + 1] - p.segs[i + 3]) < 0.05 && Math.abs(p.segs[i + 2] - p.segs[i]) > 580 && p.segs[i + 1] < 160) return true; return false; });
+  assert.equal(longDim, false, '10436 dimension line removed');
+  // walls are kept: the 0.7pt external wall rectangle is still there
+  assert.ok(g.clean.paths.some((p) => p.lw === 0.7 && p.segs.length >= 16));
+});
+
+test('REAL floor plan: no dimension lines survive the clean-up, walls do', { skip: !have && 'no real drawings' }, async () => {
+  const floor = await geometry(real('ellerton_first_floor.pdf'));
+  // the 5461 overall dimension line at the top (y = 35.28) is gone
+  const has5461 = floor.clean.paths.some((p) => { for (let i = 0; i < p.segs.length; i += 4) if (Math.abs(p.segs[i + 1] - 35.28) < 0.05 && Math.abs(p.segs[i + 3] - 35.28) < 0.05 && Math.abs(p.segs[i + 2] - p.segs[i]) > 300) return true; return false; });
+  assert.equal(has5461, false);
+  assert.ok(floor.wallSegs.length / 4 > 1000, 'walls kept');
+});

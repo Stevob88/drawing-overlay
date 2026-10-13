@@ -235,14 +235,127 @@ export async function pageGeometry(pdfjs, page) {
   for (const p of paths) for (const v of p.segs) segs[i++] = v;
   const tc = await page.getTextContent();
   const scale = statedScale(tc.items.map((t) => t.str));
+  // measurements are removed from everything the app draws, whatever the drawing style
+  const noDims = withoutDimensions(withoutLabelledDimensions(paths, dimensionLabels(tc.items, viewport.transform), scale || 50));
   return {
     width: viewport.width, height: viewport.height, segs, statedScale: scale,
-    wallSegs: wallLayer(paths, scale || 50), rooms: roomLabels(tc.items, viewport.transform),
+    wallSegs: wallLayer(noDims, scale || 50), rooms: roomLabels(tc.items, viewport.transform),
     clean: {
-      paths: withoutDimensions(paths).map((p) => ({ segs: Float64Array.from(p.segs), stroke: p.stroke, fill: p.fill, color: p.color, fillColor: p.fillColor, lw: p.lw, dash: p.dash, markup: p.markup })),
+      paths: noDims.map((p) => ({ segs: Float64Array.from(p.segs), stroke: p.stroke, fill: p.fill, color: p.color, fillColor: p.fillColor, lw: p.lw, dash: p.dash, markup: p.markup })),
       notes: [...noteLabels(tc.items, viewport.transform), ...(await markupLabels(page, viewport))],
     },
   };
+}
+
+// A measurement: 2-5 digits, optionally "mm" or "int"/"internal" (e.g. 5100, 955 int., 63).
+const MEASURE = /^\d{2,5}(\s?mm)?(\s*\(?\s*int(ernal)?\.?\s*\)?)?$/i;
+
+/** Measurement numbers with their centre, text direction and size (page points, y down). */
+export function dimensionLabels(items, vt) {
+  const out = [];
+  for (const it of items) {
+    const str = (it.str || '').trim();
+    if (!MEASURE.test(str)) continue;
+    const m = mul(vt, it.transform);
+    const size = Math.hypot(m[2], m[3]);
+    const len = Math.hypot(m[0], m[1]) || 1;
+    const dir = [m[0] / len, m[1] / len];
+    const w = it.width * Math.hypot(vt[0], vt[1]);
+    // centre = baseline start + half the width along the text + ~0.35 of the height "up"
+    out.push({ x: m[4] + dir[0] * w / 2 + m[2] * 0.35, y: m[5] + dir[1] * w / 2 + m[3] * 0.35, horiz: Math.abs(dir[1]) < 0.1, vert: Math.abs(dir[0]) < 0.1, size, w });
+  }
+  return out;
+}
+
+/**
+ * Template-independent dimension removal: every dimension has its number sitting on its
+ * dimension line. For each measurement number, drop the nearest parallel straight line it
+ * sits on, the lines that END on that line (extension lines; a wall that a dimension only
+ * touches carries on through it and is kept), and small marks at its ends (ticks, arrows,
+ * dots).
+ */
+export function withoutLabelledDimensions(paths, labels, scaleN = 50) {
+  if (!labels.length) return paths;
+  const drop = paths.map((p) => new Uint8Array(p.segs.length / 4));
+  const all = [];
+  paths.forEach((p, pi) => {
+    if (p.markup) return;
+    for (let i = 0; i < p.segs.length; i += 4) all.push({ pi, si: i / 4, x1: p.segs[i], y1: p.segs[i + 1], x2: p.segs[i + 2], y2: p.segs[i + 3] });
+  });
+  const H = all.filter((q) => Math.abs(q.y1 - q.y2) < 0.05 && Math.abs(q.x2 - q.x1) > 2);
+  const V = all.filter((q) => Math.abs(q.x1 - q.x2) < 0.05 && Math.abs(q.y2 - q.y1) > 2);
+  // one face of a stud wall has a parallel partner 50-130 mm away; a dimension line doesn't
+  const mmPerPt = (scaleN * 25.4) / 72;
+  const lo = 50 / mmPerPt;
+  const hi = 130 / mmPerPt;
+  const isWallFace = (q, list, horiz) => {
+    const c = horiz ? q.y1 : q.x1;
+    const a = horiz ? Math.min(q.x1, q.x2) : Math.min(q.y1, q.y2);
+    const b = horiz ? Math.max(q.x1, q.x2) : Math.max(q.y1, q.y2);
+    for (const r of list) {
+      const d = Math.abs((horiz ? r.y1 : r.x1) - c);
+      if (d < lo || d > hi) continue;
+      const ra = horiz ? Math.min(r.x1, r.x2) : Math.min(r.y1, r.y2);
+      const rb = horiz ? Math.max(r.x1, r.x2) : Math.max(r.y1, r.y2);
+      if (Math.min(b, rb) - Math.max(a, ra) >= 0.6 * Math.min(b - a, rb - ra)) return true;
+    }
+    return false;
+  };
+  const dimLines = [];
+  for (const L of labels) {
+    if (!L.horiz && !L.vert) continue;
+    let best = null;
+    let bd = 1.3 * L.size;
+    for (const q of L.horiz ? H : V) {
+      const along = L.horiz ? L.x : L.y;
+      const [a, b] = L.horiz ? [Math.min(q.x1, q.x2), Math.max(q.x1, q.x2)] : [Math.min(q.y1, q.y2), Math.max(q.y1, q.y2)];
+      if (along < a - 0.5 || along > b + 0.5) continue;
+      if (b - a < 0.6 * L.w) continue; // the line runs at least under the number
+      const d = L.horiz ? Math.abs(q.y1 - L.y) : Math.abs(q.x1 - L.x);
+      if (d < bd && !isWallFace(q, L.horiz ? H : V, L.horiz)) { bd = d; best = q; }
+    }
+    if (best) dimLines.push({ q: best, horiz: L.horiz, size: L.size });
+  }
+  for (const { q, horiz, size } of dimLines) {
+    // tolerances scale with the dimension text (bigger text = bigger dimension style)
+    const endTol = Math.max(6, 1.25 * size);
+    const markLen = Math.max(6, 1.0 * size);
+    const markTol = Math.max(3, 0.65 * size);
+    drop[q.pi][q.si] = 1;
+    const c = horiz ? q.y1 : q.x1;
+    const a = horiz ? Math.min(q.x1, q.x2) : Math.min(q.y1, q.y2);
+    const b = horiz ? Math.max(q.x1, q.x2) : Math.max(q.y1, q.y2);
+    // extension lines: perpendicular, crossing the dimension line's span, with an END within
+    // 6pt of it (they overshoot the dimension line slightly)
+    for (const e of horiz ? V : H) {
+      const pos = horiz ? e.x1 : e.y1;
+      if (pos < a - 0.6 || pos > b + 0.6) continue;
+      const e0 = horiz ? Math.min(e.y1, e.y2) : Math.min(e.x1, e.x2);
+      const e1 = horiz ? Math.max(e.y1, e.y2) : Math.max(e.x1, e.x2);
+      if (c < e0 - 1 || c > e1 + 1) continue;
+      if (Math.min(Math.abs(e0 - c), Math.abs(e1 - c)) <= endTol && !isWallFace(e, horiz ? V : H, !horiz)) drop[e.pi][e.si] = 1;
+    }
+    // small marks along the dimension line (ticks, arrowheads, dots): any short segment
+    // with both ends within 3pt of the line
+    for (const t of all) {
+      const len = Math.hypot(t.x2 - t.x1, t.y2 - t.y1);
+      if (len > markLen) continue;
+      const near = (x, y) => (horiz ? Math.abs(y - c) <= markTol && x >= a - markTol && x <= b + markTol : Math.abs(x - c) <= markTol && y >= a - markTol && y <= b + markTol);
+      if (!near(t.x1, t.y1) || !near(t.x2, t.y2)) continue;
+      const th = Math.abs(t.y1 - t.y2) < 0.05;
+      const tv = Math.abs(t.x1 - t.x2) < 0.05;
+      if ((th && isWallFace(t, H, true)) || (tv && isWallFace(t, V, false))) continue; // wall stub
+      drop[t.pi][t.si] = 1;
+    }
+  }
+  const out = [];
+  paths.forEach((p, pi) => {
+    if (p.markup) { out.push(p); return; }
+    const keep = [];
+    for (let i = 0; i < p.segs.length; i += 4) if (!drop[pi][i / 4]) keep.push(p.segs[i], p.segs[i + 1], p.segs[i + 2], p.segs[i + 3]);
+    if (keep.length) out.push({ ...p, segs: keep });
+  });
+  return out;
 }
 
 /**

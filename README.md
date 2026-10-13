@@ -30,13 +30,18 @@ drawn (vent boxes, tile vents, notes). Optional:
   its own lines without dimension lines, measurements, title block or keys. Kept: roof
   lines, wall hatching, tile vent symbols, short roof notes (SVP, EF to tile vent, Rwp,
   ridge) and markup comments such as the pink 20K vent boxes and yellow PV areas with
-  their notes. Dimensions are recognised by their end ticks. Untick to see the roof sheet
-  exactly as printed.
+  their notes. Untick to see the roof sheet exactly as printed.
 - **Move roof**: drag to nudge it. **Undo roof moves** puts it back.
 - **Line up again**, **Fit** (zooms to the house).
 
 The two drawings and the line-up are remembered on the phone, so it opens where you left
 off. Choose a different PDF at any time with **Change**.
+
+Measurements are removed automatically from both drawings, whatever the drawing style:
+every measurement number (e.g. 5100, 955 int.) marks its dimension line, which is removed
+with its extension lines and end marks (ticks, arrows, dots); dimension ticks are also
+recognised on their own. Wall faces (lines with a parallel partner 50-130 mm away) are
+never treated as dimensions. Measurement numbers are never drawn.
 
 Scale: if both drawings state a scale (e.g. "1:50") they are matched to it. If they don't,
 they are assumed to be at the same scale.
