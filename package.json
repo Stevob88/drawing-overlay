@@ -11,7 +11,8 @@
     "build:artifact": "node tools/build-artifact.mjs",
     "e2e:real": "node tests/e2e/run-e2e.mjs --real",
     "e2e:scales": "node tests/e2e/run-scales.mjs",
-    "e2e:spread": "node tests/e2e/run-spread.mjs"
+    "e2e:spread": "node tests/e2e/run-spread.mjs",
+    "e2e:desktop": "node tests/e2e/run-desktop.mjs"
   },
   "keywords": [],
   "author": "",

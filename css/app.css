@@ -134,7 +134,12 @@ select { border: 1.5px solid var(--line); background: var(--surface); border-rad
 .canvaswrap { position: relative; border-radius: 20px; overflow: hidden; background: var(--paper); border: 1px solid var(--line); box-shadow: var(--shadow); }
 .canvaswrap.aiming { border-color: #ff8c00; box-shadow: 0 0 0 3px rgba(255, 140, 0, .35), var(--shadow); }
 .canvaswrap canvas { display: block; width: 100%; height: 62vh; min-height: 340px; background: #fff; }
-@media (min-width: 960px) { .canvaswrap canvas { height: calc(100vh - 230px); min-height: 520px; } }
+/* Wide screens: the drawing box stretches to the height of the side column, so the canvas
+   must fill the box, not stop at a fixed height (that left the bottom of drawings blank). */
+@media (min-width: 960px) {
+  .layout:not(.empty) .canvaswrap { display: flex; flex-direction: column; }
+  .canvaswrap canvas { flex: 1 1 auto; height: calc(100vh - 230px); min-height: 520px; }
+}
 .canvasbtns { position: absolute; right: 10px; bottom: 10px; display: flex; flex-direction: column; gap: 8px; }
 .canvasbtns button { width: 46px; min-height: 46px; padding: 0; font-size: 22px; border-radius: 14px; background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: blur(6px); box-shadow: 0 2px 10px rgba(13, 22, 38, .18); }
 .chips { position: absolute; left: 10px; bottom: 10px; display: flex; gap: 6px; flex-wrap: wrap; pointer-events: none; }
