@@ -234,12 +234,16 @@ export async function pageGeometry(pdfjs, page) {
   let i = 0;
   for (const p of paths) for (const v of p.segs) segs[i++] = v;
   const tc = await page.getTextContent();
-  const scale = statedScale(tc.items.map((t) => t.str));
+  const strings = tc.items.map((t) => t.str);
+  const labels = dimensionLabels(tc.items, viewport.transform);
+  const pageLongMm = (Math.max(viewport.width, viewport.height) * 25.4) / 72;
+  const drawingScale = drawingScaleOf(measureDimensionScale(paths, labels), statedScaleInfo(strings, pageLongMm));
+  const scale = statedScale(strings);
   // measurements are removed from everything the app draws, whatever the drawing style
-  const noDims = withoutDimensions(withoutLabelledDimensions(paths, dimensionLabels(tc.items, viewport.transform), scale || 50));
+  const noDims = withoutDimensions(withoutLabelledDimensions(paths, labels, drawingScale?.n || 50));
   return {
-    width: viewport.width, height: viewport.height, segs, statedScale: scale,
-    wallSegs: wallLayer(noDims, scale || 50), rooms: roomLabels(tc.items, viewport.transform),
+    width: viewport.width, height: viewport.height, segs, statedScale: scale, drawingScale,
+    wallSegs: wallLayer(noDims, drawingScale?.n || 50), rooms: roomLabels(tc.items, viewport.transform),
     clean: {
       paths: noDims.map((p) => ({ segs: Float64Array.from(p.segs), stroke: p.stroke, fill: p.fill, color: p.color, fillColor: p.fillColor, lw: p.lw, dash: p.dash, markup: p.markup })),
       notes: [...noteLabels(tc.items, viewport.transform), ...(await markupLabels(page, viewport))],
@@ -262,7 +266,7 @@ export function dimensionLabels(items, vt) {
     const dir = [m[0] / len, m[1] / len];
     const w = it.width * Math.hypot(vt[0], vt[1]);
     // centre = baseline start + half the width along the text + ~0.35 of the height "up"
-    out.push({ x: m[4] + dir[0] * w / 2 + m[2] * 0.35, y: m[5] + dir[1] * w / 2 + m[3] * 0.35, horiz: Math.abs(dir[1]) < 0.1, vert: Math.abs(dir[0]) < 0.1, size, w });
+    out.push({ x: m[4] + dir[0] * w / 2 + m[2] * 0.35, y: m[5] + dir[1] * w / 2 + m[3] * 0.35, horiz: Math.abs(dir[1]) < 0.1, vert: Math.abs(dir[0]) < 0.1, size, w, value: parseInt(str, 10) });
   }
   return out;
 }
@@ -536,6 +540,109 @@ export function roomLabels(items, vt) {
     out.push({ str, x: m[4] + w / 2, y: m[5] - size * 0.35, size });
   }
   return out;
+}
+
+// Common drawing scales (1:N). Measured and stated scales snap to the nearest of these.
+export const STANDARD_SCALES = [5, 10, 20, 25, 50, 75, 100, 125, 150, 200, 250, 500, 1000, 1250, 2500];
+export function snapScale(n, tol = 0.04) {
+  let best = null;
+  for (const std of STANDARD_SCALES) {
+    const d = Math.abs(Math.log(n / std));
+    if (d < tol && (!best || d < best.d)) best = { std, d };
+  }
+  return best ? best.std : null;
+}
+
+const PAPER_LONG_MM = { 0: 1189, 1: 841, 2: 594, 3: 420, 4: 297 };
+
+/**
+ * Stated scale ("1:50", optionally "@A3") adjusted for the page it actually sits on. A drawing
+ * issued as "1:50 @A1" but saved on an A3 page is really 1:100 on that page.
+ */
+export function statedScaleInfo(strings, pageLongMm) {
+  const n = statedScale(strings);
+  if (!n) return { n: null, effective: null, adjusted: false };
+  const paper = strings.map((t) => String(t).match(/@\s*A([0-4])\b/i)?.[1]).find(Boolean);
+  if (paper !== undefined && pageLongMm) {
+    const factor = PAPER_LONG_MM[paper] / pageLongMm;
+    if (Math.abs(factor - 1) > 0.03) {
+      const eff = snapScale(n * factor, 0.06);
+      if (eff) return { n, effective: eff, adjusted: true, paper: 'A' + paper };
+    }
+  }
+  return { n, effective: n, adjusted: false };
+}
+
+/**
+ * Measure the real scale from the drawing's dimensions. Each measurement number (e.g. 5461)
+ * sits on a dimension line between two extension lines; real mm / drawn points gives the
+ * scale. Votes are weighted by drawn length and snapped to standard scales, so one-off
+ * oddities (wall-thickness labels, details at another scale) are outvoted.
+ */
+export function measureDimensionScale(paths, labels) {
+  const H = [];
+  const V = [];
+  for (const p of paths) {
+    if (p.markup || !p.stroke) continue;
+    const a = p.segs;
+    for (let i = 0; i < a.length; i += 4) {
+      const q = { x1: a[i], y1: a[i + 1], x2: a[i + 2], y2: a[i + 3] };
+      if (Math.abs(q.y1 - q.y2) < 0.05 && Math.abs(q.x2 - q.x1) > 2) H.push(q);
+      else if (Math.abs(q.x1 - q.x2) < 0.05 && Math.abs(q.y2 - q.y1) > 2) V.push(q);
+    }
+  }
+  const votes = new Map();
+  let total = 0;
+  let count = 0;
+  for (const L of labels) {
+    if ((!L.horiz && !L.vert) || !(L.value >= 20)) continue;
+    const along = L.horiz ? L.x : L.y;
+    let best = null;
+    let bd = 1.3 * L.size;
+    for (const q of L.horiz ? H : V) {
+      const c = L.horiz ? q.y1 : q.x1;
+      const [a, b] = L.horiz ? [Math.min(q.x1, q.x2), Math.max(q.x1, q.x2)] : [Math.min(q.y1, q.y2), Math.max(q.y1, q.y2)];
+      if (along < a - 0.5 || along > b + 0.5 || b - a < 0.6 * L.w) continue;
+      const d = Math.abs(c - (L.horiz ? L.y : L.x));
+      if (d < bd) { bd = d; best = { c, a, b }; }
+    }
+    if (!best) continue;
+    // nearest extension lines either side of the number
+    let left = -Infinity;
+    let right = Infinity;
+    for (const e of L.horiz ? V : H) {
+      const pos = L.horiz ? e.x1 : e.y1;
+      if (pos < best.a - 0.6 || pos > best.b + 0.6) continue;
+      const e0 = L.horiz ? Math.min(e.y1, e.y2) : Math.min(e.x1, e.x2);
+      const e1 = L.horiz ? Math.max(e.y1, e.y2) : Math.max(e.x1, e.x2);
+      if (best.c < e0 - 1 || best.c > e1 + 1 || e1 - e0 < 2) continue;
+      if (pos < along - 0.5 && pos > left) left = pos;
+      if (pos > along + 0.5 && pos < right) right = pos;
+    }
+    if (!isFinite(left) || !isFinite(right)) continue;
+    const drawn = right - left;
+    if (drawn < 15) continue;
+    const std = snapScale(((L.value * 72) / 25.4) / drawn);
+    if (!std) continue;
+    votes.set(std, (votes.get(std) || 0) + drawn);
+    total += drawn;
+    count++;
+  }
+  if (!count) return null;
+  const [n, w] = [...votes.entries()].sort((x, y) => y[1] - x[1])[0];
+  return { n, share: w / total, count, reliable: (count >= 3 && w / total >= 0.6) || (count === 2 && w / total > 0.99) };
+}
+
+/** Pick the drawing's effective scale: measured if reliable, else stated (page-corrected). */
+export function drawingScaleOf(measured, stated) {
+  const statedN = stated?.effective ?? null;
+  if (measured?.reliable) {
+    return { n: measured.n, source: 'dimensions', stated: statedN, disagree: !!(statedN && statedN !== measured.n), count: measured.count };
+  }
+  if (statedN) return { n: statedN, source: stated.adjusted ? 'stated-page' : 'stated', stated: statedN, disagree: false };
+  // nothing stated: even a single measured dimension beats assuming the drawings match
+  if (measured) return { n: measured.n, source: 'dimensions', stated: null, disagree: false, count: measured.count, weak: true };
+  return null;
 }
 
 /** "1:50", "1 : 50" ... The most common stated scale on the sheet, or null. */

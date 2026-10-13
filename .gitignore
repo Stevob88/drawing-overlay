@@ -6,3 +6,4 @@ tests/e2e/out-real/
 *.pdf
 !tests/fixtures/synthetic/*.pdf
 dist-artifact/
+tests/e2e/out-scales/

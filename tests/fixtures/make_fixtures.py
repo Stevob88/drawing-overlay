@@ -34,12 +34,13 @@ PART = 100.0  # partition thickness
 class Plan:
     """Draw in real-world mm with origin at a chosen page position (pt)."""
 
-    def __init__(self, c, ox, oy):
+    def __init__(self, c, ox, oy, scale=SCALE):
         self.c, self.ox, self.oy = c, ox, oy
+        self.k = 72 / 25.4 / scale  # mm -> pt at this drawing scale
 
     def p(self, x, y):
         # mm (x right, y down from top-left outer corner) -> page pt (y up)
-        return self.ox + x * MM2PT, self.oy - y * MM2PT
+        return self.ox + x * self.k, self.oy - y * self.k
 
     def line(self, x1, y1, x2, y2):
         a, b = self.p(x1, y1)
@@ -48,7 +49,7 @@ class Plan:
 
     def rect(self, x, y, w, h, fill=0, stroke=1):
         a, b = self.p(x, y + h)
-        self.c.rect(a, b, w * MM2PT, h * MM2PT, fill=fill, stroke=stroke)
+        self.c.rect(a, b, w * self.k, h * self.k, fill=fill, stroke=stroke)
 
     def text(self, x, y, s, size=9, centre=True):
         a, b = self.p(x, y)
@@ -59,10 +60,10 @@ class Plan:
 
     def circle(self, x, y, r_mm, fill=0):
         a, b = self.p(x, y)
-        self.c.circle(a, b, r_mm * MM2PT, fill=fill, stroke=1)
+        self.c.circle(a, b, r_mm * self.k, fill=fill, stroke=1)
 
 
-def title_block(c, title, code, rev_date):
+def title_block(c, title, code, rev_date, scale_text="Scale 1:50 @ A3"):
     c.setLineWidth(0.5)
     c.setStrokeColorRGB(0, 0, 0)
     c.rect(PAGE_W - 260, 20, 240, 160)
@@ -71,7 +72,8 @@ def title_block(c, title, code, rev_date):
     c.setFont("Helvetica", 10)
     c.drawString(PAGE_W - 250, 135, title)
     c.drawString(PAGE_W - 250, 115, "Drawing no. " + code)
-    c.drawString(PAGE_W - 250, 95, "Scale 1:50 @ A3")
+    if scale_text:
+        c.drawString(PAGE_W - 250, 95, scale_text)
     c.drawString(PAGE_W - 250, 75, "Date " + rev_date)
     c.drawString(PAGE_W - 250, 55, "SYNTHETIC TEST FIXTURE - NOT A REAL DRAWING")
 
@@ -143,10 +145,10 @@ def floor_plan(path, raster=False):
     c.save()
 
 
-def roof_plan(path):
+def roof_plan(path, scale=SCALE, scale_text="Scale 1:50 @ A3"):
     c = canvas.Canvas(path, pagesize=(PAGE_W, PAGE_H))
     # Deliberately placed at a different page origin to the floor plan
-    pl = Plan(c, 160, 600)
+    pl = Plan(c, 160, 600, scale)
     wp_in = (W - 10113.0) / 2  # 161.5 mm: wall plate outer face inside masonry face
     ovh = 300.0  # eaves overhang beyond masonry face
     # Roof outline (thick)
@@ -189,7 +191,7 @@ def roof_plan(path):
     c.drawString(160, 175, "10113 outer faces of wall plates")
     c.drawString(160, 163, "Trussed rafters at 600 centres. Tile vents to plots: 30, 31, 63")
     c.drawString(160, 151, "Solar PV to plots: 5, 6")
-    title_block(c, "ROOF PLAN", "BELX 2401 AA04", "2026-03-01")
+    title_block(c, "ROOF PLAN", "BELX 2401 AA04", "2026-03-01", scale_text)
     c.showPage()
     c.save()
 
@@ -291,4 +293,9 @@ if __name__ == "__main__":
     floor_plan(os.path.join(OUT, "ellerton_first_floor.pdf"))
     roof_plan(os.path.join(OUT, "ellerton_roof.pdf"))
     raster_floor(None, os.path.join(OUT, "ellerton_first_floor_raster.pdf"))
+    # Roof plans drawn at 1:100 (floor plan is 1:50): scale stated / not stated / stated for the
+    # wrong paper size (issued 1:50 @A1, saved on an A3 page, so really 1:100 here).
+    roof_plan(os.path.join(OUT, "ellerton_roof_1to100.pdf"), 100, "Scale 1:100 @ A3")
+    roof_plan(os.path.join(OUT, "ellerton_roof_1to100_unstated.pdf"), 100, "")
+    roof_plan(os.path.join(OUT, "ellerton_roof_1to100_wrongpaper.pdf"), 100, "Scale 1:50 @ A1")
     print("written to", OUT)

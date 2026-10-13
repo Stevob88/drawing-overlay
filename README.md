@@ -43,8 +43,16 @@ with its extension lines and end marks (ticks, arrows, dots); dimension ticks ar
 recognised on their own. Wall faces (lines with a parallel partner 50-130 mm away) are
 never treated as dimensions. Measurement numbers are never drawn.
 
-Scale: if both drawings state a scale (e.g. "1:50") they are matched to it. If they don't,
-they are assumed to be at the same scale.
+Scales: the two drawings do not need to be at the same scale. The app works out each
+drawing's scale (the N in 1:N) and resizes the roof to match the floor plan:
+1. It measures the scale from the drawing's own dimensions. Each measurement number (e.g.
+   5461) sits between two extension lines, so real mm / drawn length gives the scale.
+   Votes are snapped to standard scales (1:20, 1:50, 1:100 ...) and outvoted if odd.
+2. If that is not possible it reads the stated scale ("1:50 @A3") and corrects it for the page
+   it is on: a drawing issued "1:50 @A1" but saved on an A3 page is really 1:100.
+3. If one dimension is all it has, it uses that and says it is less certain.
+The "Drawing scales" panel says what it decided ("Roof is 1:100, floor is 1:50. The roof is
+enlarged ×2 to match.") and lets you set either scale by hand if a drawing looks the wrong size.
 
 Everything runs on the phone. Drawings are never uploaded. It works offline after the
 first visit.
@@ -71,6 +79,7 @@ npm run serve        # http://localhost:8123
 npm test             # unit tests
 npm run e2e          # full run in headless Chromium at iPhone size (synthetic drawings)
 npm run e2e:real     # same, on real drawings in tests/fixtures/real/ (git-ignored)
+npm run e2e:scales   # roof at 1:100 over floor at 1:50 (three ways the scale can be given)
 npm run build:sw     # after changing app files, so phones pick up the new version
 ```
 

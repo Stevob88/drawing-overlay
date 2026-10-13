@@ -3,7 +3,8 @@
 import * as db from './db.js';
 import { openPdf, loadPage, tint } from './pdfdoc.js';
 import { Viewer } from './viewer.js';
-import { snapNear, roofToFloorPoint, regionAround } from './geom.js';
+import { snapNear, roofToFloorPoint, regionAround, scaleRatio } from './geom.js';
+import { STANDARD_SCALES } from './pdf-extract.js';
 
 const $app = document.getElementById('app');
 const $toast = document.getElementById('toast');
@@ -12,7 +13,7 @@ const FLOOR_TINT = '#0047c2';
 const NOTICE = 'Setting-out aid only. Vent positions on the roof plan are indicative. Check against the truss layout / designer before fixing.';
 
 // saved between visits (IndexedDB, this device only)
-let saved = { roof: null, floor: null, align: null, nudge: { x: 0, y: 0 }, opacity: 0.6, colour: true, flip: false, wallsOnly: true, cleanRoof: true };
+let saved = { roof: null, floor: null, align: null, nudge: { x: 0, y: 0 }, opacity: 0.6, colour: true, flip: false, wallsOnly: true, cleanRoof: true, scaleOverride: { roof: null, floor: null } };
 // loaded drawings: { doc, pages, page, canvas, scale, width, height, segs, statedScale, tinted }
 const dr = { roof: null, floor: null };
 let mode = 'view'; // view | pick-roof | pick-floor | move
@@ -53,11 +54,32 @@ function pickFile() {
 }
 
 // ---------------------------------------------------------------- geometry
-/** Roof page points -> floor page points. Scale from the drawings' stated scales (1:N). */
+/**
+ * Each drawing's scale (the N in 1:N): the one you set by hand, else the one the app worked
+ * out (measured from the drawing's dimensions, or read from its text and corrected for the
+ * page size).
+ */
+const scaleN = (slot) => saved.scaleOverride?.[slot] || dr[slot]?.drawingScale?.n || null;
+/** Roof page points -> floor page points: bring both drawings to the same scale. */
 function roofRatio() {
-  const a = dr.roof?.statedScale;
-  const b = dr.floor?.statedScale;
-  return a && b ? a / b : 1;
+  return scaleRatio(scaleN('roof'), scaleN('floor'));
+}
+const SOURCE_TEXT = { dimensions: 'measured from its dimensions', stated: 'read from the drawing text', 'stated-page': 'from the drawing text, corrected for the page size' };
+function scaleSource(slot) {
+  if (saved.scaleOverride?.[slot]) return 'set by you';
+  const d = dr[slot]?.drawingScale;
+  if (!d) return 'not found';
+  return d.weak ? 'from one dimension only, please check' : SOURCE_TEXT[d.source];
+}
+/** One plain sentence about how the drawings were matched. */
+function matchText() {
+  const a = scaleN('roof');
+  const b = scaleN('floor');
+  if (!a || !b) return `Couldn't work out the scale of the ${!a ? 'roof' : 'floor'} plan, so the drawings are assumed to be at the same scale.`;
+  const r = a / b;
+  if (Math.abs(r - 1) < 0.005) return `Both drawings are 1:${a}. No resizing needed.`;
+  const x = r >= 1 ? r : 1 / r;
+  return `Roof is 1:${a}, floor is 1:${b}. The roof is ${r > 1 ? 'enlarged' : 'reduced'} ×${+x.toFixed(2)} to match.`;
 }
 const roofToFloor = (x, y) => roofToFloorPoint(x, y, saved.align, roofRatio(), saved.nudge);
 /** Area where the two sheets overlap (in floor points): a good first view after lining up. */
@@ -78,10 +100,10 @@ function homeBoxUnflipped() {
   const seed = saved.align.floorRef;
   let box = null;
   for (const cell of [8, 14]) {
-    box = regionAround(f.segs, f.width, f.height, seed, cell);
-    if (box && box.x1 - box.x0 > 0.12 * f.width && box.y1 - box.y0 > 0.12 * f.height) break;
+    const b = regionAround(f.segs, f.width, f.height, seed, cell);
+    if (b && b.x1 - b.x0 > 0.12 * f.width && b.y1 - b.y0 > 0.12 * f.height) { box = b; break; }
   }
-  if (!box) return overlapBox();
+  if (!box) return overlapBox(); // nothing house-sized found around the corner: show the overlap
   const m = 0.06 * Math.max(box.x1 - box.x0, box.y1 - box.y0);
   return { x0: box.x0 - m, y0: box.y0 - m, x1: box.x1 + m, y1: box.y1 + m };
 }
@@ -300,14 +322,17 @@ async function choose(slot) {
     const buf = await file.arrayBuffer();
     const fileId = await db.saveFile(file.name, buf);
     saved[slot] = { fileId, name: file.name, page: 1 };
+    saved.scaleOverride = { ...saved.scaleOverride, [slot]: null };
     saved.align = null; // a new drawing needs lining up again
     saved.nudge = { x: 0, y: 0 };
     await loadSlot(slot, saved[slot]);
     await save();
     db.requestPersistence();
     $toast.hidden = true;
-    if (dr.roof && dr.floor) startLineUp();
-    else render();
+    if (dr.roof && dr.floor) {
+      startLineUp();
+      if (Math.abs(roofRatio() - 1) >= 0.005 || !scaleN('roof') || !scaleN('floor')) toast(matchText(), 6000);
+    } else render();
   } catch (e) {
     toast('Could not open that PDF: ' + e.message, 6000);
   }
@@ -315,6 +340,7 @@ async function choose(slot) {
 
 async function setPage(slot, n) {
   saved[slot].page = n;
+  saved.scaleOverride = { ...saved.scaleOverride, [slot]: null };
   saved.align = null;
   saved.nudge = { x: 0, y: 0 };
   toast('Opening page…', 20000);
@@ -411,6 +437,21 @@ function instruction() {
   return null;
 }
 
+let scaleBoxOpen = false;
+function scaleBox() {
+  const unknown = !scaleN('roof') || !scaleN('floor');
+  const differ = Math.abs(roofRatio() - 1) >= 0.005;
+  const pick = (slot, label) => h('label', { class: 'scalepick', for: `scale-${slot}` }, h('span', null, label),
+    h('select', { id: `scale-${slot}`, onchange: (e) => { saved.scaleOverride = { ...saved.scaleOverride, [slot]: e.target.value ? +e.target.value : null }; scaleBoxOpen = true; save(); render(); } },
+      h('option', { value: '' }, `Auto${dr[slot]?.drawingScale ? ` (1:${dr[slot].drawingScale.n})` : ' (not found)'}`),
+      STANDARD_SCALES.map((n) => h('option', { value: n, selected: saved.scaleOverride?.[slot] === n }, `1:${n}`))),
+    h('small', null, scaleSource(slot)));
+  return h('details', { class: `scalebox ${unknown ? 'warn' : differ ? 'diff' : ''}`, open: unknown || differ || scaleBoxOpen || !!(saved.scaleOverride?.roof || saved.scaleOverride?.floor), ontoggle: (e) => { if (e.target.open) scaleBoxOpen = true; } },
+    h('summary', null, h('span', { class: 'sumtitle' }, 'Drawing scales'), h('span', { class: 'sumtext' }, matchText())),
+    h('div', { class: 'scalepicks' }, pick('roof', 'Roof plan'), pick('floor', 'Floor plan')),
+    h('p', { class: 'small muted' }, 'The app measures each drawing\'s scale from its dimensions and resizes the roof to match the floor. If a drawing looks the wrong size, set its scale here.'));
+}
+
 const tool = (icon, text, onclick, extra = {}) => h('button', { class: `tool ${extra.class || ''}`, onclick, 'aria-pressed': extra.pressed == null ? null : String(extra.pressed) }, ico(icon), text);
 const toggle = (id, text, checked, onchange) => h('label', { class: 'switch' }, text, h('input', { id, type: 'checkbox', checked, onchange }));
 
@@ -437,6 +478,7 @@ function render() {
   const options = both && !picking ? h('div', { class: 'panel a-options' },
     h('div', { class: 'sliderrow' }, h('label', { for: 'opacity' }, 'Roof see-through'), h('output', { id: 'opacityval', for: 'opacity' }, `${pct}%`)),
     h('input', { id: 'opacity', type: 'range', min: 10, max: 100, value: pct, oninput: (e) => { saved.opacity = e.target.value / 100; document.getElementById('opacityval').textContent = `${e.target.value}%`; viewer.redraw(); }, onchange: save }),
+    scaleBox(),
     toggle('walls', dr.floor.wallSegs ? 'Floor plan: walls and room names only' : 'Floor plan: hide measurements, keys and notes', saved.wallsOnly, (e) => { saved.wallsOnly = e.target.checked; save(); viewer.redraw(); }),
     toggle('cleanroof', 'Roof plan: hide measurements and sheet notes', saved.cleanRoof, (e) => { saved.cleanRoof = e.target.checked; save(); render(); }),
     toggle('colour', 'Colour the drawings (roof red, floor blue)', saved.colour, (e) => { saved.colour = e.target.checked; save(); render(); }),
@@ -478,7 +520,7 @@ function render() {
 
 // ---------------------------------------------------------------- start
 async function boot() {
-  window.__roofline = { dr, saved: () => saved, viewer: () => viewer }; // used by automated tests
+  window.__roofline = { dr, saved: () => saved, viewer: () => viewer, roofRatio: () => roofRatio(), roofToFloor: (x, y) => roofToFloor(x, y) }; // used by automated tests
   try { saved = { ...saved, ...(await db.kvGet('overlay', {})) }; } catch { /* first run */ }
   for (const slot of ['roof', 'floor']) {
     if (!saved[slot]) continue;

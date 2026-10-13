@@ -67,6 +67,9 @@ export function roofToFloorPoint(x, y, align, k = 1, nudge = { x: 0, y: 0 }) {
   };
 }
 
+/** Factor that brings the roof drawing to the floor drawing's scale (1 when either is unknown). */
+export const scaleRatio = (roofN, floorN) => (roofN && floorN ? roofN / floorN : 1);
+
 /** 2x3 affine helpers [a,b,c,d,e,f] as in PDF / canvas */
 export const mul = (m, n) => [
   m[0] * n[0] + m[2] * n[1],
@@ -91,13 +94,18 @@ export function regionAround(segs, width, height, seed, cell = 10) {
   const nx = Math.ceil(width / cell);
   const ny = Math.ceil(height / cell);
   const ink = new Float32Array(nx * ny);
+  // spread each line's length over the cells it passes through, so a few long lines (a house
+  // drawn as simple rectangles) count as much as thousands of short ones
   for (let i = 0; i < segs.length; i += 4) {
-    const x = (segs[i] + segs[i + 2]) / 2;
-    const y = (segs[i + 1] + segs[i + 3]) / 2;
-    const cx = Math.floor(x / cell);
-    const cy = Math.floor(y / cell);
-    if (cx < 0 || cy < 0 || cx >= nx || cy >= ny) continue;
-    ink[cy * nx + cx] += Math.hypot(segs[i + 2] - segs[i], segs[i + 3] - segs[i + 1]);
+    const len = Math.hypot(segs[i + 2] - segs[i], segs[i + 3] - segs[i + 1]);
+    const steps = Math.max(1, Math.ceil(len / (cell / 2)));
+    const part = len / (steps + 1);
+    for (let k = 0; k <= steps; k++) {
+      const t = k / steps;
+      const cx = Math.floor((segs[i] + (segs[i + 2] - segs[i]) * t) / cell);
+      const cy = Math.floor((segs[i + 1] + (segs[i + 3] - segs[i + 1]) * t) / cell);
+      if (cx >= 0 && cy >= 0 && cx < nx && cy < ny) ink[cy * nx + cx] += part;
+    }
   }
   const sx = Math.floor(seed.x / cell);
   const sy = Math.floor(seed.y / cell);

@@ -135,3 +135,51 @@ test('REAL floor plan: no dimension lines survive the clean-up, walls do', { ski
   assert.equal(has5461, false);
   assert.ok(floor.wallSegs.length / 4 > 1000, 'walls kept');
 });
+
+// ---------- different scales on the two drawings ----------
+import { measureDimensionScale, snapScale, statedScaleInfo } from '../js/pdf-extract.js';
+import { scaleRatio } from '../js/geom.js';
+
+test('scales snap to the nearest standard scale', () => {
+  assert.equal(snapScale(49.2), 50);
+  assert.equal(snapScale(101.5), 100);
+  assert.equal(snapScale(70), null); // not close to any standard scale
+});
+
+test('stated scale is corrected for the page it sits on (1:50 @A1 saved on an A3 page is 1:100)', () => {
+  const a3 = 420, a1 = 841;
+  assert.deepEqual(statedScaleInfo(['Scale 1:50 @ A3'], a3), { n: 50, effective: 50, adjusted: false });
+  const r = statedScaleInfo(['1 : 50', '@A1'], a3);
+  assert.equal(r.effective, 100);
+  assert.equal(r.adjusted, true);
+  assert.equal(statedScaleInfo(['1:50', '@A1'], a1).effective, 50);
+  assert.equal(statedScaleInfo(['no scale'], a3).effective, null);
+});
+
+test('a roof drawn at 1:100 is detected and brought to the floor plan scale 1:50', async () => {
+  const floor = await geometry(path.join(SYN, 'ellerton_first_floor.pdf'));
+  assert.equal(floor.drawingScale.n, 50);
+  for (const [file, source] of [['ellerton_roof_1to100.pdf', 'stated'], ['ellerton_roof_1to100_unstated.pdf', 'dimensions'], ['ellerton_roof_1to100_wrongpaper.pdf', 'stated-page']]) {
+    const roof = await geometry(path.join(SYN, file));
+    assert.equal(roof.drawingScale.n, 100, file);
+    assert.equal(roof.drawingScale.source, source, file);
+    const k = scaleRatio(roof.drawingScale.n, floor.drawingScale.n);
+    assert.equal(k, 2, file);
+    // the roof outline is 10436 + 2 x 300 mm wide: once resized it must measure that on the floor scale
+    let x0 = Infinity, x1 = -Infinity;
+    for (const p of roof.clean.paths) if (p.lw === 0.7) for (let i = 0; i < p.segs.length; i += 2) { x0 = Math.min(x0, p.segs[i]); x1 = Math.max(x1, p.segs[i]); }
+    const mm = (x1 - x0) * k * 50 * 25.4 / 72;
+    assert.ok(Math.abs(mm - 11036) < 1, `${file}: roof outline ${mm.toFixed(1)} mm`);
+  }
+});
+
+test('dimension measurement: the measured scale agrees with the stated scale on the real drawings', { skip: !have && 'no real drawings' }, async () => {
+  const roof = await geometry(real('ellerton_roof.pdf'));
+  const floor = await geometry(real('ellerton_first_floor.pdf'));
+  for (const g of [roof, floor]) {
+    assert.equal(g.drawingScale.n, 50);
+    assert.equal(g.drawingScale.source, 'dimensions');
+    assert.equal(g.drawingScale.disagree, false);
+  }
+  assert.ok(floor.drawingScale.count >= 20, 'many dimensions measured on the floor plan');
+});

@@ -9,7 +9,8 @@
     "serve": "python3 -m http.server 8123",
     "e2e": "node tests/e2e/run-e2e.mjs",
     "build:artifact": "node tools/build-artifact.mjs",
-    "e2e:real": "node tests/e2e/run-e2e.mjs --real"
+    "e2e:real": "node tests/e2e/run-e2e.mjs --real",
+    "e2e:scales": "node tests/e2e/run-scales.mjs"
   },
   "keywords": [],
   "author": "",
