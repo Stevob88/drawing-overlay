@@ -33,6 +33,8 @@ function h(tag, attrs, ...kids) {
   for (const c of kids.flat(Infinity)) if (c != null && c !== false) el.append(c instanceof Node ? c : String(c));
   return el;
 }
+/** Replace an element's children; flattens arrays and skips empty values. */
+const put = (el, ...kids) => el.replaceChildren(...kids.flat(Infinity).filter((k) => k != null && k !== false && k !== ''));
 function toast(t, ms = 2500) {
   $toast.textContent = t;
   $toast.hidden = false;
@@ -344,64 +346,116 @@ function onPoint(p) {
 }
 
 // ---------------------------------------------------------------- screen
+// ---------------------------------------------------------------- interface
+const ICONS = {
+  roof: '<path d="M3 12l9-8 9 8"/><path d="M5.5 10.5V20h13v-9.5"/><circle cx="12" cy="14.5" r="2"/>',
+  floor: '<rect x="4" y="4" width="16" height="16" rx="1.5"/><path d="M4 12h8M12 4v8M12 16v4M16 12h4"/>',
+  target: '<circle cx="12" cy="12" r="4"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/>',
+  move: '<path d="M12 3v18M3 12h18"/><path d="M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/>',
+  fit: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+  flip: '<path d="M12 3v18" stroke-dasharray="2 3"/><path d="M9 7L3 12l6 5z"/><path d="M15 7l6 5-6 5z"/>',
+  lock: '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>',
+  check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+  close: '<path d="M6 6l12 12M18 6L6 18"/>',
+  undo: '<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/>',
+};
+function ico(name) {
+  const el = document.createElement('span');
+  el.className = 'ico';
+  el.setAttribute('aria-hidden', 'true');
+  el.innerHTML = `<svg viewBox="0 0 24 24">${ICONS[name]}</svg>`;
+  return el;
+}
+const LOGO = '<svg class="logo" viewBox="0 0 40 40" aria-hidden="true"><rect x="7" y="19" width="26" height="16" rx="2.5" fill="none" stroke="#1c4fd8" stroke-width="3"/><path d="M4 21L20 6l16 15" fill="none" stroke="#d92b2b" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="20" cy="27" r="3" fill="#d92b2b"/></svg>';
+
+function header() {
+  const brand = h('div', { class: 'brand' });
+  brand.insertAdjacentHTML('afterbegin', LOGO);
+  const words = h('div', null,
+    h('div', { class: 'wordmark' }, 'Roof', h('b', null, 'Line')),
+    h('div', { class: 'tagline' }, 'Roof plan over floor plan'));
+  brand.append(words);
+  return h('header', { class: 'appbar' }, brand, h('span', { class: 'pill', title: 'Drawings never leave this device' }, ico('lock'), 'On this device only'));
+}
+
+function progress(picking) {
+  const both = dr.roof && dr.floor;
+  const done = [!!dr.roof, !!dr.floor, !!(both && !picking && saved.align)];
+  const cur = !dr.roof ? 0 : !dr.floor ? 1 : done[2] ? 3 : 2;
+  const labels = ['Roof plan', 'Floor plan', 'Line up'];
+  return h('ol', { class: 'steps', 'aria-label': 'Progress' }, labels.map((t, i) => h('li', { class: done[i] ? 'done' : i === cur ? 'current' : '' },
+    h('span', { class: 'n' }, done[i] ? ico('check') : String(i + 1)), h('span', { class: 't' }, t))));
+}
+
 function slotCard(slot, label) {
   const d = dr[slot];
-  return h('div', { class: 'card filecard' },
-    h('div', { class: 'filelabel' }, h('span', { class: `swatch ${slot}` }), label),
-    d ? h('div', { class: 'filename' }, d.name) : h('div', { class: 'muted' }, 'No drawing chosen'),
-    d && d.pages > 1 ? h('label', { class: 'inline' }, 'Page ',
-      h('select', { onchange: (e) => setPage(slot, +e.target.value) },
-        Array.from({ length: d.pages }, (_, i) => h('option', { value: i + 1, selected: d.page === i + 1 }, String(i + 1))))) : null,
-    h('button', { class: d ? '' : 'primary', onclick: () => choose(slot) }, d ? 'Change' : 'Choose PDF'));
+  return h('div', { class: `file ${slot}` },
+    h('div', { class: 'badge-ico' }, ico(slot)),
+    h('div', null,
+      h('div', { class: 'label' }, label),
+      h('div', { class: d ? 'name set' : 'name' }, d ? d.name : 'No drawing chosen'),
+      d && d.pages > 1 ? h('label', { class: 'page' }, 'Page ',
+        h('select', { onchange: (e) => setPage(slot, +e.target.value) },
+          Array.from({ length: d.pages }, (_, i) => h('option', { value: i + 1, selected: d.page === i + 1 }, String(i + 1))))) : null),
+    h('button', { class: d ? 'small' : (slot === 'roof' || dr.roof) ? 'primary' : '', onclick: () => choose(slot) }, d ? 'Change' : 'Choose PDF'));
 }
 
 function instruction() {
-  if (!dr.roof || !dr.floor) return h('p', { class: 'step' }, !dr.roof ? 'Choose the roof plan PDF.' : 'Now choose the floor plan PDF (first or second floor).');
-  if (mode === 'pick-roof') return h('p', { class: 'step' }, h('strong', null, 'Line up 1 of 2: '), 'tap a corner of the building on the ROOF plan (e.g. the top-left outside corner of the walls). Drag one finger to aim, lift to place. Two fingers to zoom.');
-  if (mode === 'pick-floor') return h('p', { class: 'step' }, h('strong', null, 'Line up 2 of 2: '), 'tap the SAME corner on the FLOOR plan.');
-  if (mode === 'move') return h('p', { class: 'step' }, h('strong', null, 'Move roof: '), 'drag with one finger to slide the roof drawing. Tap Done when it sits right.');
-  if (!saved.align) return h('p', { class: 'step' }, 'Not lined up yet. Tap ', h('strong', null, 'Line up'), ' and pick the same corner on each drawing.');
+  const note = (n, ...kids) => h('div', { class: 'callout' }, h('span', { class: 'num' }, typeof n === 'string' ? ico(n) : String(n)), h('p', null, ...kids));
+  if (!dr.roof || !dr.floor) return note(!dr.roof ? 1 : 2, !dr.roof ? 'Choose the roof plan PDF.' : 'Now choose the floor plan PDF (first or second floor).');
+  if (mode === 'pick-roof') return note(1, h('strong', null, 'Line up 1 of 2: '), 'tap a corner of the building on the ROOF plan (e.g. the top-left outside corner of the walls). Drag one finger to aim, lift to place. Two fingers to zoom.');
+  if (mode === 'pick-floor') return note(2, h('strong', null, 'Line up 2 of 2: '), 'tap the SAME corner on the FLOOR plan.');
+  if (mode === 'move') return note('move', h('strong', null, 'Move roof: '), 'drag with one finger to slide the roof drawing. Tap Done when it sits right.');
+  if (!saved.align) return note(3, 'Not lined up yet. Tap ', h('strong', null, 'Line up'), ' and pick the same corner on each drawing.');
   return null;
 }
+
+const tool = (icon, text, onclick, extra = {}) => h('button', { class: `tool ${extra.class || ''}`, onclick, 'aria-pressed': extra.pressed == null ? null : String(extra.pressed) }, ico(icon), text);
+const toggle = (id, text, checked, onchange) => h('label', { class: 'switch' }, text, h('input', { id, type: 'checkbox', checked, onchange }));
 
 function render() {
   const both = dr.roof && dr.floor;
   const canvas = h('canvas', { 'aria-label': 'Roof plan over floor plan' });
   const picking = mode === 'pick-roof' || mode === 'pick-floor';
-  const legend = both && !picking ? h('div', { class: 'legend' },
-    saved.colour ? [h('span', { class: 'f' }, '■ Floor plan'), h('span', { class: 'r' }, '■ Roof plan')] : h('span', null, 'Roof plan on top of floor plan')) : null;
-  const controls = both ? (picking
-    ? h('div', { class: 'toolbar' },
-      mode === 'pick-floor' ? h('button', { onclick: () => { mode = 'pick-roof'; render(); } }, '‹ Back to roof') : null,
-      h('button', { onclick: () => { mode = 'view'; if (saved.align && !saved.align.floorRef) saved.align = null; render(); } }, 'Cancel'))
-    : h('div', { class: 'stack' },
-      h('div', { class: 'toolbar' },
-        h('button', { class: saved.align ? '' : 'primary', onclick: startLineUp }, saved.align ? 'Line up again' : 'Line up'),
-        h('button', { class: mode === 'move' ? 'on' : '', onclick: () => { mode = mode === 'move' ? 'view' : 'move'; if (mode === 'view') save(); render(); } }, mode === 'move' ? 'Done' : 'Move roof'),
-        h('button', { onclick: () => viewer.fit(homeBox(), 8) }, 'Fit'),
-        h('button', { class: saved.flip ? 'on' : '', 'aria-pressed': String(!!saved.flip), onclick: () => { saved.flip = !saved.flip; save(); render(); } }, saved.flip ? 'Flipped ✓' : 'Flip (opp. hand)')),
-      h('label', { class: 'inline' }, h('input', { id: 'walls', type: 'checkbox', checked: saved.wallsOnly, onchange: (e) => { saved.wallsOnly = e.target.checked; save(); viewer.redraw(); } }),
-        dr.floor.wallSegs ? 'Floor plan: walls and room names only' : 'Floor plan: hide measurements, keys and notes'),
-      h('label', { class: 'inline' }, h('input', { id: 'cleanroof', type: 'checkbox', checked: saved.cleanRoof, onchange: (e) => { saved.cleanRoof = e.target.checked; save(); render(); } }), 'Roof plan: hide measurements and sheet notes'),
-      h('label', { for: 'opacity' }, 'Roof see-through'),
-      h('input', { id: 'opacity', type: 'range', min: 10, max: 100, value: Math.round(saved.opacity * 100), oninput: (e) => { saved.opacity = e.target.value / 100; viewer.redraw(); }, onchange: save }),
-      h('label', { class: 'inline' }, h('input', { id: 'colour', type: 'checkbox', checked: saved.colour, onchange: (e) => { saved.colour = e.target.checked; save(); render(); } }), 'Colour the drawings (roof red, floor blue)'),
-      saved.nudge.x || saved.nudge.y ? h('button', { class: 'small', onclick: () => { saved.nudge = { x: 0, y: 0 }; save(); viewer.redraw(); render(); } }, 'Undo roof moves') : null)) : null;
+  const hasDrawing = both || dr.roof || dr.floor;
 
-  $app.replaceChildren(
-    h('div', { class: 'topbar' }, h('h1', null, 'Roof over floor')),
-    h('div', { class: 'files' }, slotCard('roof', 'Roof plan'), slotCard('floor', 'Floor plan')),
-    instruction() || '',
-    both || dr.roof || dr.floor ? h('div', { class: 'canvaswrap' }, canvas,
+  const chips = both && !picking ? h('div', { class: 'chips' },
+    saved.colour ? [h('span', { class: 'chip' }, h('i', { class: 'dot floor' }), 'Floor plan'), h('span', { class: 'chip' }, h('i', { class: 'dot roof' }), 'Roof plan')] : h('span', { class: 'chip' }, 'Roof plan on floor plan')) : null;
+
+  const tools = both ? (picking
+    ? h('div', { class: 'tools two a-tools' },
+      mode === 'pick-floor' ? tool('undo', '‹ Back to roof', () => { mode = 'pick-roof'; render(); }) : null,
+      tool('close', 'Cancel', () => { mode = 'view'; if (saved.align && !saved.align.floorRef) saved.align = null; render(); }))
+    : h('div', { class: 'tools a-tools' },
+      tool('target', saved.align ? 'Line up again' : 'Line up', startLineUp, { class: saved.align ? '' : 'primary' }),
+      tool('move', mode === 'move' ? 'Done' : 'Move roof', () => { mode = mode === 'move' ? 'view' : 'move'; if (mode === 'view') save(); render(); }, { class: mode === 'move' ? 'on' : '' }),
+      tool('fit', 'Fit', () => viewer.fit(homeBox(), 8)),
+      tool('flip', saved.flip ? 'Flipped ✓' : 'Flip (opp. hand)', () => { saved.flip = !saved.flip; save(); render(); }, { class: saved.flip ? 'on' : '', pressed: !!saved.flip }))) : null;
+
+  const pct = Math.round(saved.opacity * 100);
+  const options = both && !picking ? h('div', { class: 'panel a-options' },
+    h('div', { class: 'sliderrow' }, h('label', { for: 'opacity' }, 'Roof see-through'), h('output', { id: 'opacityval', for: 'opacity' }, `${pct}%`)),
+    h('input', { id: 'opacity', type: 'range', min: 10, max: 100, value: pct, oninput: (e) => { saved.opacity = e.target.value / 100; document.getElementById('opacityval').textContent = `${e.target.value}%`; viewer.redraw(); }, onchange: save }),
+    toggle('walls', dr.floor.wallSegs ? 'Floor plan: walls and room names only' : 'Floor plan: hide measurements, keys and notes', saved.wallsOnly, (e) => { saved.wallsOnly = e.target.checked; save(); viewer.redraw(); }),
+    toggle('cleanroof', 'Roof plan: hide measurements and sheet notes', saved.cleanRoof, (e) => { saved.cleanRoof = e.target.checked; save(); render(); }),
+    toggle('colour', 'Colour the drawings (roof red, floor blue)', saved.colour, (e) => { saved.colour = e.target.checked; save(); render(); }),
+    saved.nudge.x || saved.nudge.y ? h('button', { class: 'small linkbtn', onclick: () => { saved.nudge = { x: 0, y: 0 }; save(); viewer.redraw(); render(); } }, ico('undo'), 'Undo roof moves') : null) : null;
+
+  const notice = both ? h('p', { class: 'notice a-notice', role: 'note' }, ico('info'), NOTICE) : null;
+  const hint = instruction();
+  const layout = h('div', { class: `layout ${hasDrawing ? '' : 'empty'} ${hint ? 'hinted' : ''}` },
+    h('div', { class: `files a-files ${both ? 'compact' : ''}` }, slotCard('roof', 'Roof plan'), slotCard('floor', 'Floor plan')),
+    hint ? (hint.classList.add('a-hint'), hint) : null,
+    hasDrawing ? h('div', { class: `canvaswrap a-canvas ${picking ? 'aiming' : ''}` }, canvas,
       both && saved.flip && !picking ? h('div', { class: 'modebar' }, h('span', { class: 'mirrorbadge' }, showCleanRoof() ? 'FLIPPED - opposite hand' : 'FLIPPED - opposite hand. Roof writing reads backwards.')) : null,
+      chips,
       h('div', { class: 'canvasbtns' },
         h('button', { 'aria-label': 'Zoom in', onclick: () => viewer.zoomBy(1.6) }, '+'),
-        h('button', { 'aria-label': 'Zoom out', onclick: () => viewer.zoomBy(1 / 1.6) }, '−'))) : '',
-    legend || '',
-    controls || '',
-    both ? h('p', { class: 'notice' }, NOTICE) : '',
-    h('p', { class: 'muted small' }, 'Drawings stay on this phone. Nothing is uploaded.'),
-  );
+        h('button', { 'aria-label': 'Zoom out', onclick: () => viewer.zoomBy(1 / 1.6) }, '−'))) : null,
+    tools, options, notice);
+
+  put($app, header(), progress(picking), layout, h('p', { class: 'foot' }, 'Drawings stay on this device. Nothing is uploaded.'));
 
   viewer?.destroy();
   viewer = null;
