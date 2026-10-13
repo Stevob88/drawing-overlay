@@ -399,8 +399,8 @@ const ICONS = {
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
-  expand: '<path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/>',
-  shrink: '<path d="M4 14h6v6M20 10h-6V4M10 14l-7 7M14 10l7-7"/>',
+  expand: '<path d="M14 4h6v6M10 20H4v-6M20 4l-6.5 6.5M4 20l6.5-6.5"/>',
+  shrink: '<path d="M14 4v6h6M10 20v-6H4M14 10l6.5-6.5M10 14l-6.5 6.5"/>',
   undo: '<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/>',
 };
 function ico(name) {
@@ -528,8 +528,8 @@ function render() {
       h('div', { class: 'stage' }, canvas,
       both && saved.flip && !picking ? h('div', { class: 'modebar' }, h('span', { class: 'mirrorbadge' }, showCleanRoof() ? 'FLIPPED - opposite hand' : 'FLIPPED - opposite hand. Roof writing reads backwards.')) : null,
       chips,
+      h('button', { class: 'fullbtn', 'aria-label': fullView ? 'Exit full screen' : 'Full screen', title: fullView ? 'Exit full screen' : 'Full screen', onclick: () => setFullView(!fullView) }, ico(fullView ? 'shrink' : 'expand')),
       h('div', { class: 'canvasbtns' },
-        h('button', { 'aria-label': fullView ? 'Exit full screen' : 'Full screen', title: fullView ? 'Exit full screen' : 'Full screen', onclick: () => setFullView(!fullView) }, ico(fullView ? 'shrink' : 'expand')),
         h('button', { 'aria-label': 'Zoom in', onclick: () => viewer.zoomBy(1.6) }, '+'),
         h('button', { 'aria-label': 'Zoom out', onclick: () => viewer.zoomBy(1 / 1.6) }, '−'))),
       fullView && tools ? h('div', { class: 'fullbar' }, tools) : null) : null,
