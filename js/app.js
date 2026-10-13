@@ -62,10 +62,11 @@ function isDark() {
   return t === 'dark' || (t === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
 }
 const pal = () => (isDark() ? PALETTES.dark : PALETTES.light);
+let themeSetByApp = false;
 function applyTheme() {
   const t = state.settings.theme;
-  if (t === 'auto') delete document.documentElement.dataset.theme;
-  else document.documentElement.dataset.theme = t;
+  if (t !== 'auto') { document.documentElement.dataset.theme = t; themeSetByApp = true; }
+  else if (themeSetByApp) { delete document.documentElement.dataset.theme; themeSetByApp = false; }
 }
 
 function topbar(title, back = '#/') {
@@ -485,7 +486,7 @@ function typesScreen() {
         h('button', {
           class: 'small danger',
           onclick: async () => {
-            if (!confirm(`Delete ${ht.name} ${ht.drawingCode} and its calibrations? (PDF files stay in storage until "Clear all data".)`)) return;
+            if (!(await askConfirm(`Delete ${ht.name} ${ht.drawingCode} and its calibrations? (PDF files stay in storage until "Clear all data".)`))) return;
             await db.del('houseTypes', ht.id);
             state.houseTypes = state.houseTypes.filter((x) => x.id !== ht.id);
             route();
@@ -1030,7 +1031,7 @@ async function pickerScreen(id, slot) {
           viewer.redraw();
         },
       }, 'Original PDF on/off'),
-      h('button', { class: 'danger', onclick: async () => { if (!confirm('Reset all layer choices for this drawing to automatic?')) return; ht.layers[slot] = null; await save(); route(); } }, 'Reset to automatic')),
+      h('button', { class: 'danger', onclick: async () => { if (!(await askConfirm('Reset all layer choices for this drawing to automatic?'))) return; ht.layers[slot] = null; await save(); route(); } }, 'Reset to automatic')),
     listBox);
   viewer.resize();
   viewer.fit({ x0: 0, y0: 0, x1: m.width, y1: m.height }, 8);
@@ -1095,13 +1096,13 @@ function settingsScreen() {
           onclick: async () => {
             const f = await pickFile('application/json,.json');
             if (!f) return;
-            if (!confirm('Restoring replaces house types, calibrations and schedule on this device. Continue?')) return;
+            if (!(await askConfirm('Restoring replaces house types, calibrations and schedule on this device. Continue?'))) return;
             try { await db.importBackup(JSON.parse(await f.text())); await loadAll(); toast('Restored'); route(); } catch (e) { toast('Restore failed: ' + e.message, 5000); }
           },
         }, 'Restore backup'))),
     h('div', { class: 'card' }, h('h2', null, 'Display'), h('label', null, 'Theme'), theme),
     h('div', { class: 'card' }, h('h2', null, 'Storage'), storageInfo,
-      h('button', { class: 'danger', onclick: async () => { if (!confirm('Delete ALL drawings, schedule and calibrations from this device?')) return; await db.wipeAll(); await loadAll(); route(); } }, 'Clear all data')),
+      h('button', { class: 'danger', onclick: async () => { if (!(await askConfirm('Delete ALL drawings, schedule and calibrations from this device?'))) return; await db.wipeAll(); await loadAll(); route(); } }, 'Clear all data')),
     h('p', { class: 'muted' }, 'RoofLine runs offline and never sends drawings anywhere. PDF.js (Apache-2.0) is bundled.'));
 }
 
@@ -1165,10 +1166,10 @@ function scheduleScreen() {
           },
         }))),
         h('td', { class: 'reasons' }, (r.flags || []).join('; ')),
-        h('td', null, h('button', { class: 'small danger', onclick: () => { if (confirm(`Delete row for plot ${r.plotRaw}?`)) { s.rows.splice(s.rows.indexOf(r), 1); renderAll(); } } }, '✕'))))))),
+        h('td', null, h('button', { class: 'small danger', onclick: async () => { if (await askConfirm(`Delete row for plot ${r.plotRaw}?`, 'Delete row')) { s.rows.splice(s.rows.indexOf(r), 1); renderAll(); } } }, '✕'))))))),
     h('button', {
-      class: 'small', onclick: () => {
-        const n = prompt('Plot number for the new row');
+      class: 'small', onclick: async () => {
+        const n = await askText('Plot number for the new row', 'numeric');
         if (!n) return;
         s.rows.push({ plot: parseInt(n, 10), plotRaw: n, cells: { [m.plotCol]: n }, page: 0, uncertain: ['Added by hand'], flags: ['Added by hand'] });
         s.rows.sort((a, b) => a.plot - b.plot);
@@ -1206,9 +1207,9 @@ function scheduleScreen() {
       class: 'primary', style: 'width:100%;margin-top:12px',
       onclick: async () => {
         if (!m.codeCol || !m.nameCol || !m.handCol) { toast('Choose the code, name and handing columns'); return; }
-        if (!m.confirmed && !confirm('The column mapping is not confirmed. Plot screens will show a warning until it is. Save anyway?')) return;
+        if (!m.confirmed && !(await askConfirm('The column mapping is not confirmed. Plot screens will show a warning until it is. Save anyway?'))) return;
         const v = validateRows(s.rows, s.expected.from, s.expected.to);
-        if ((v.missing.length || v.duplicates.length) && !confirm(`There are ${v.missing.length} missing and ${v.duplicates.length} duplicated plot numbers. Save anyway? (Duplicated plots will refuse to open.)`)) return;
+        if ((v.missing.length || v.duplicates.length) && !(await askConfirm(`There are ${v.missing.length} missing and ${v.duplicates.length} duplicated plot numbers. Save anyway? (Duplicated plots will refuse to open.)`))) return;
         state.schedule = s;
         state.pendingSchedule = null;
         await db.kvSet('schedule', s);

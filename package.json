@@ -9,12 +9,14 @@
     "build:sw": "node tools/build-sw.mjs",
     "serve": "python3 -m http.server 8123",
     "e2e": "node tests/e2e/run-e2e.mjs",
-    "e2e:real": "node tests/e2e/run-real.mjs"
+    "e2e:real": "node tests/e2e/run-real.mjs",
+    "build:artifact": "node tools/build-artifact.mjs"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "devDependencies": {
+    "esbuild": "^0.24.2",
     "pdfjs-dist": "^4.10.38",
     "playwright": "^1.56.1"
   },

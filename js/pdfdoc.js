@@ -3,9 +3,11 @@ import * as pdfjs from '../vendor/pdfjs/pdf.min.mjs';
 import * as db from './db.js';
 import { extractPage, prepareDrawing, inspectPdf, pdfTextPages } from './pdf-extract.js';
 
-pdfjs.GlobalWorkerOptions.workerSrc = new URL('../vendor/pdfjs/pdf.worker.min.mjs', import.meta.url).href;
+// Paths are relative to the page (index.html sits next to vendor/), so the same code works
+// as separate modules or bundled into one page.
+pdfjs.GlobalWorkerOptions.workerSrc = new URL('vendor/pdfjs/pdf.worker.min.mjs', document.baseURI).href;
 const OPTS = {
-  standardFontDataUrl: new URL('../vendor/pdfjs/standard_fonts/', import.meta.url).href,
+  standardFontDataUrl: new URL('vendor/pdfjs/standard_fonts/', document.baseURI).href,
   isEvalSupported: false,
   disableAutoFetch: true,
   disableStream: true,
