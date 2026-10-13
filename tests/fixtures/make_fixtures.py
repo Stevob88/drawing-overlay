@@ -291,5 +291,4 @@ if __name__ == "__main__":
     floor_plan(os.path.join(OUT, "ellerton_first_floor.pdf"))
     roof_plan(os.path.join(OUT, "ellerton_roof.pdf"))
     raster_floor(None, os.path.join(OUT, "ellerton_first_floor_raster.pdf"))
-    schedule(os.path.join(OUT, "plot_schedule.pdf"))
     print("written to", OUT)

@@ -8,13 +8,14 @@ const LOUPE_ZOOM = 4;
 const FINGER_OFFSET = 80;
 
 export class Viewer {
-  constructor(canvas, { draw, onPoint, onTap, snap } = {}) {
+  constructor(canvas, { draw, onPoint, onTap, snap, onDrag } = {}) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.draw = draw || (() => {});
     this.onPoint = onPoint || null;
     this.onTap = onTap || null;
     this.snap = snap || null;
+    this.onDrag = onDrag || null; // 'drag' mode: one finger moves something (world units)
     this.view = { s: 1, tx: 0, ty: 0 };
     this.mode = 'pan';
     this.pointers = new Map();
@@ -171,6 +172,11 @@ export class Viewer {
         return;
       }
       if (this.mode === 'point') { this._updateCross(e); return; }
+      if (this.mode === 'drag' && this.onDrag) {
+        this.onDrag((e.clientX - prev.x) / this.view.s, (e.clientY - prev.y) / this.view.s);
+        this.redraw();
+        return;
+      }
       this.view.tx += e.clientX - prev.x;
       this.view.ty += e.clientY - prev.y;
       this.redraw();

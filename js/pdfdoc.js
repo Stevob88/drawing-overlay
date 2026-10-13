@@ -1,7 +1,6 @@
 // Browser-side PDF access via the locally bundled pdf.js. No network.
 import * as pdfjs from '../vendor/pdfjs/pdf.min.mjs';
-import * as db from './db.js';
-import { extractPage, prepareDrawing, inspectPdf, pdfTextPages } from './pdf-extract.js';
+import { pageGeometry } from './pdf-extract.js';
 
 // Paths are relative to the page (index.html sits next to vendor/), so the same code works
 // as separate modules or bundled into one page.
@@ -13,70 +12,48 @@ const OPTS = {
   disableStream: true,
   verbosity: 0,
 };
-const EXTRACT_VERSION = 8; // bump when extraction/classification changes
 
-const docs = new Map();
-export async function openDoc(fileId) {
-  if (docs.has(fileId)) return docs.get(fileId);
-  const f = await db.get('files', fileId);
-  if (!f) throw new Error('Drawing file is missing from this device. Re-import it.');
-  const p = pdfjs.getDocument({ data: new Uint8Array(f.data.slice(0)), ...OPTS }).promise;
-  docs.set(fileId, p);
-  return p;
+export async function openPdf(bytes) {
+  return pdfjs.getDocument({ data: new Uint8Array(bytes.slice(0)), ...OPTS }).promise;
 }
 
-export const inspectBytes = (buf) => inspectPdf(pdfjs, new Uint8Array(buf.slice(0)), OPTS);
-export const textPages = (buf) => pdfTextPages(pdfjs, new Uint8Array(buf.slice(0)), OPTS);
-
-/** Prepared drawing model (groups, text, notes), cached per file/page/role. */
-export async function getDrawing(fileId, pageNo, role) {
-  const key = `${fileId}:${pageNo}:${role}:v${EXTRACT_VERSION}`;
-  const cached = await db.get('extracts', key);
-  if (cached) return cached.model;
-  const doc = await openDoc(fileId);
-  const page = await doc.getPage(pageNo);
-  const ex = await extractPage(pdfjs, page);
-  const model = prepareDrawing(ex, role);
-  try { await db.put('extracts', { key, model }); } catch { /* cache only */ }
-  return model;
-}
-
-const IOS_MAX_PIXELS = 16_000_000; // iOS Safari canvas area limit (~16.7M)
+// Phone canvases have an area limit (~16.7M px on iPhone); two drawings share memory.
+const MAX_PIXELS = 9_000_000;
 
 /**
- * Render a region of a page (drawing units) to a canvas.
- * Returns { canvas, unitsPerPx, dpi, limited }  limited=true if the DPI had to be reduced.
+ * Render one page as it appears in the PDF (markups such as vent boxes included) and read
+ * its line geometry for snapping. Units: page points, y down.
  */
-export async function renderRegion(fileId, pageNo, crop, targetDpi = 300, maxPixels = IOS_MAX_PIXELS) {
-  const doc = await openDoc(fileId);
+export async function loadPage(doc, pageNo) {
   const page = await doc.getPage(pageNo);
   const vp1 = page.getViewport({ scale: 1 });
-  const c = crop || { x0: 0, y0: 0, x1: vp1.width, y1: vp1.height };
-  const wU = c.x1 - c.x0;
-  const hU = c.y1 - c.y0;
-  let scale = targetDpi / 72;
-  let limited = false;
-  if (wU * hU * scale * scale > maxPixels) { scale = Math.sqrt(maxPixels / (wU * hU)); limited = true; }
-  const vp = page.getViewport({ scale, offsetX: -c.x0 * scale, offsetY: -c.y0 * scale });
+  const scale = Math.min(4, Math.sqrt(MAX_PIXELS / (vp1.width * vp1.height)));
+  const vp = page.getViewport({ scale });
   const canvas = document.createElement('canvas');
-  canvas.width = Math.floor(wU * scale);
-  canvas.height = Math.floor(hU * scale);
+  canvas.width = Math.floor(vp.width);
+  canvas.height = Math.floor(vp.height);
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = '#fff';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   await page.render({ canvasContext: ctx, viewport: vp }).promise;
-  return { canvas, unitsPerPx: 1 / scale, dpi: scale * 72, limited, crop: c };
+  const geo = await pageGeometry(pdfjs, page);
+  return { canvas, scale, ...geo };
 }
 
-/** Tint a black-on-white render: black -> colour, white stays white. */
+/**
+ * Tinted copy for overlaying: dark linework takes the colour, white stays white, so the
+ * page can be laid over another with 'multiply'. Coloured markups keep their hue.
+ */
 export function tint(src, colour) {
   const c = document.createElement('canvas');
   c.width = src.width;
   c.height = src.height;
   const ctx = c.getContext('2d');
   ctx.drawImage(src, 0, 0);
-  ctx.globalCompositeOperation = 'screen';
-  ctx.fillStyle = colour;
-  ctx.fillRect(0, 0, c.width, c.height);
+  if (colour) {
+    ctx.globalCompositeOperation = 'screen';
+    ctx.fillStyle = colour;
+    ctx.fillRect(0, 0, c.width, c.height);
+  }
   return c;
 }

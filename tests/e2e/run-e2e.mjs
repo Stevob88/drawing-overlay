@@ -1,231 +1,118 @@
-// End-to-end run of the real app in headless Chromium at iPhone size, using the
-// SYNTHETIC fixtures. Run: npm run e2e   (screenshots go to tests/e2e/out/)
+// End-to-end run of the app in headless Chromium at iPhone size.
+//   npm run e2e         synthetic drawings (screenshots: tests/e2e/out/)
+//   npm run e2e:real    real drawings in tests/fixtures/real/ (git-ignored; out-real/)
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { loadDrawing, SYN } from '../helpers.mjs';
 
+const REALRUN = process.argv.includes('--real');
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../..');
-const OUT = path.join(ROOT, 'tests/e2e/out');
+const FIX = path.join(ROOT, 'tests/fixtures', REALRUN ? 'real' : 'synthetic');
+const OUT = path.join(ROOT, 'tests/e2e', REALRUN ? 'out-real' : 'out');
+const ROOF = path.join(FIX, 'ellerton_roof.pdf');
+const FLOOR = path.join(FIX, 'ellerton_first_floor.pdf');
+if (!fs.existsSync(ROOF) || !fs.existsSync(FLOOR)) { console.log('Drawings not present, skipping'); process.exit(0); }
+// The same building corner on each drawing (page points). Real: top-left outside corner of
+// the walls. Synthetic: top-left corner of the roof outline / external wall.
+const CORNERS = REALRUN
+  ? { roof: [383.2, 68.5], floor: [428.8, 106.2] }
+  : { roof: [142.992, 224.882], floor: [120, 201.89] };
 fs.mkdirSync(OUT, { recursive: true });
-const PORT = 8123;
+
+const PORT = REALRUN ? 8124 : 8123;
 const BASE = `http://localhost:${PORT}/`;
 const server = spawn('python3', ['-m', 'http.server', String(PORT), '--bind', '127.0.0.1'], { cwd: ROOT, stdio: 'ignore' });
 await new Promise((r) => setTimeout(r, 800));
-
 const fail = (m) => { throw new Error('E2E FAIL: ' + m); };
-const bbox = (segs) => { let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9; for (let i = 0; i < segs.length; i += 2) { x0 = Math.min(x0, segs[i]); x1 = Math.max(x1, segs[i]); y0 = Math.min(y0, segs[i + 1]); y1 = Math.max(y1, segs[i + 1]); } return { x0, y0, x1, y1 }; };
-const floorM = await loadDrawing(path.join(SYN, 'ellerton_first_floor.pdf'), 'floor');
-const roofM = await loadDrawing(path.join(SYN, 'ellerton_roof.pdf'), 'roof');
-const outer = bbox(floorM.groups.find((g) => g.lw === 0.7).segs);
-const plate = bbox(roofM.groups.find((g) => g.dash).segs);
-
 const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' }).catch(() => chromium.launch());
-const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, acceptDownloads: true, serviceWorkers: 'allow' });
+const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, serviceWorkers: 'allow' });
 const page = await ctx.newPage();
 const external = [];
-page.on('request', (r) => { if (!r.url().startsWith(BASE) && !r.url().startsWith('blob:') && !r.url().startsWith('data:')) external.push(r.url()); });
+page.on('request', (r) => { const u = r.url(); if (!u.startsWith(BASE) && !u.startsWith('blob:') && !u.startsWith('data:')) external.push(u); });
 const errors = [];
 page.on('pageerror', (e) => errors.push(String(e)));
 page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
-page.on('dialog', (d) => d.accept());
 const shot = (n) => page.screenshot({ path: path.join(OUT, n + '.png'), fullPage: true });
+const canvasShot = (n) => page.locator('.canvaswrap canvas').screenshot({ path: path.join(OUT, n + '.png') });
 const step = (s) => console.log('•', s);
+const text = () => page.locator('#app').innerText();
 
-async function choose(buttonName, file, nth = 0) {
-  const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.getByRole('button', { name: buttonName }).nth(nth).click()]);
+async function choose(nth, file) {
+  const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.getByRole('button', { name: /Choose PDF|Change/ }).nth(nth).click()]);
   await fc.setFiles(file);
 }
-/** Click a world/drawing point on the active viewer (mouse: no finger offset). */
-async function tapWorld(x, y, vi = 0) {
-  const pos = await page.evaluate(([x, y, vi]) => {
-    const v = window.__roofline.viewers[vi];
-    const r0 = v.canvas.getBoundingClientRect();
-    if (r0.top < 0 || r0.bottom > innerHeight) v.canvas.scrollIntoView({ block: 'center' });
+/** Zoom on a page point, then tap it with the mouse (no finger offset). */
+async function tapAt(x, y, zoom = 8) {
+  const pos = await page.evaluate(([x, y, zoom]) => {
+    const v = window.__roofline.viewer();
+    v.canvas.scrollIntoView({ block: 'center' });
+    v.view.s = zoom; v.view.tx = v.w / 2 - x * zoom; v.view.ty = v.h / 2 - y * zoom; v.redraw();
     const r = v.canvas.getBoundingClientRect();
-    return { x: r.left + x * v.view.s + v.view.tx, y: r.top + y * v.view.s + v.view.ty };
-  }, [x, y, vi]);
+    return { x: r.left + x * zoom + v.view.tx, y: r.top + y * zoom + v.view.ty };
+  }, [x, y, zoom]);
   await page.mouse.move(pos.x, pos.y);
   await page.mouse.down();
-  await page.mouse.move(pos.x + 0.2, pos.y);
+  await page.mouse.move(pos.x + 0.3, pos.y);
   await page.mouse.move(pos.x, pos.y);
   await page.mouse.up();
-  await page.waitForTimeout(80);
-}
-async function zoomAround(x, y, k, vi = 0) {
-  await page.evaluate(([x, y, k, vi]) => {
-    const v = window.__roofline.viewers[vi];
-    v.view.s *= k; v.view.tx = v.w / 2 - x * v.view.s; v.view.ty = v.h / 2 - y * v.view.s; v.redraw();
-  }, [x, y, k, vi]);
+  await page.waitForTimeout(150);
 }
 
 try {
-  step('home');
+  step('start: choose roof, then floor');
   await page.goto(BASE);
-  await page.waitForSelector('.plotinput');
-  await shot('01-home');
-
-  step('import schedule');
-  await page.goto(BASE + '#/settings');
-  await choose(/Import schedule PDF/, path.join(SYN, 'plot_schedule.pdf'));
-  await page.waitForSelector('text=Review imported schedule');
-  await shot('02-schedule-review');
-  const summary = await page.locator('.msg').allInnerTexts();
-  if (!summary.some((t) => t.includes('181 plots'))) fail('schedule summary: ' + summary.join(' | '));
-  await page.getByText('I confirm this mapping is correct').click();
-  await page.getByRole('button', { name: 'Save schedule' }).click();
-  await page.waitForSelector('text=Plot schedule');
-
-  step('plot 30 with no drawings');
-  await page.goto(BASE + '#/plot/30');
-  await page.waitForSelector('text=No drawings imported for ELLERTON.');
-  await page.getByRole('button', { name: /Import drawings for ELLERTON/ }).click();
-  await page.waitForSelector('text=Import house type');
-  if ((await page.locator('input').nth(0).inputValue()) !== 'ELLERTON') fail('name not prefilled');
-  await page.locator('input').nth(1).fill('Ellerton Elder');
-  await choose('Choose PDF', path.join(SYN, 'ellerton_roof.pdf'), 0);
-  await page.waitForSelector('text=Method A: vector');
-  await choose('Choose PDF', path.join(SYN, 'ellerton_first_floor.pdf'), 1); // ground=0 after roof replaced? first floor slot
-  await page.waitForTimeout(500);
-  await shot('03-import');
-  await page.getByRole('button', { name: 'Save house type' }).click();
-  await page.waitForSelector('text=House types');
-  const typesText = await page.locator('#app').innerText();
-  if (!/Roof plan: ellerton_roof\.pdf/.test(typesText)) fail('roof not saved: ' + typesText);
-  const floorSlot = /First floor: ellerton_first_floor/.test(typesText) ? 'first' : /Ground floor/.test(typesText) ? 'ground' : null;
-  if (!floorSlot) fail('floor not saved');
-  if (floorSlot !== 'first') console.log('  NOTE: floor plan went into', floorSlot);
-
-  step('plot 30 not calibrated -> calibrate');
-  await page.goto(BASE + '#/plot/30');
-  await page.waitForSelector('text=Not calibrated yet.');
-  await page.getByRole('button', { name: /Set up overlay/ }).click();
-  await page.getByRole('button', { name: 'Full calibration' }).click();
-  await page.waitForSelector('text=1. Roof plan: scale');
+  await page.waitForSelector('text=Choose the roof plan PDF.');
+  await shot('01-start');
+  await choose(0, ROOF);
+  await page.waitForSelector('text=Now choose the floor plan PDF', { timeout: 60000 });
+  await choose(1, FLOOR);
+  await page.waitForSelector('text=Line up 1 of 2', { timeout: 60000 });
   await page.waitForTimeout(300);
-  await zoomAround(plate.x0, plate.y0, 4);
-  await tapWorld(plate.x0 + 0.6, plate.y0 + 0.4); // slightly off: must snap
-  await zoomAround(plate.x1, plate.y0, 1);
-  await tapWorld(plate.x1 - 0.5, plate.y0 + 0.3);
-  await page.getByPlaceholder('Real length in mm').fill('10113');
-  await page.waitForTimeout(100);
-  await shot('04-cal-roof-scale');
-  const roofReadout = await page.locator('#app').innerText();
-  if (!/A snapped to a line (end|crossing), B snapped to a line (end|crossing)/.test(roofReadout)) fail('roof points not snapped');
-  if (!/Matches the stated scale 1:50/.test(roofReadout)) fail('roof scale check: ' + roofReadout.slice(-600));
-  await page.getByRole('button', { name: 'Next ›' }).click();
-  await zoomAround(plate.x0, plate.y0, 1);
-  await tapWorld(plate.x0 + 0.3, plate.y0 - 0.2);
-  await page.getByRole('button', { name: 'Next ›' }).click();
-  await page.waitForSelector('text=3. First floor: scale');
-  await zoomAround(outer.x0, outer.y0, 4);
-  await tapWorld(outer.x0, outer.y0);
-  await zoomAround(outer.x1, outer.y0, 1);
-  await tapWorld(outer.x1, outer.y0);
-  await page.getByPlaceholder('Real length in mm').fill('10436');
-  await page.waitForTimeout(100);
-  if (!/Matches the stated scale 1:50/.test(await page.locator('#app').innerText())) fail('floor scale check');
-  await page.getByRole('button', { name: 'Next ›' }).click();
-  await zoomAround(outer.x0, outer.y0, 1);
-  await tapWorld(outer.x0, outer.y0);
-  await page.getByRole('button', { name: 'Next ›' }).click();
-  await page.waitForSelector('text=5. Reference offset');
-  await page.getByRole('button', { name: /Top-left corner/ }).click();
-  await page.waitForTimeout(300);
-  await page.getByText('I have checked this offset').click();
-  await shot('05-cal-offset');
-  await page.getByRole('button', { name: 'Next ›' }).click();
-  await page.waitForSelector('text=6. Check and save');
-  await page.waitForTimeout(300);
-  await zoomAround(0, 0, 1);
-  await tapWorld(0, 0);
-  await zoomAround(10436, 0, 1);
-  await tapWorld(10436, 0);
-  await page.getByPlaceholder('Expected mm').fill('10436');
-  await page.waitForTimeout(100);
-  await shot('06-cal-check');
-  const chk = await page.locator('#app').innerText();
-  const md = chk.match(/difference (-?[\d.]+) mm/);
-  if (!md || Math.abs(parseFloat(md[1])) > 1) fail('measure check diff: ' + (md && md[1]));
-  if (!/Rotation between the reference lines: 0\.000°/.test(chk)) fail('rotation not 0');
-  await page.getByRole('button', { name: 'Save calibration' }).click();
-  await page.waitForSelector('text=Not tape-checked on site yet');
+  await shot('02-lineup-roof');
 
-  step('plot 30 overlay (As)');
+  step('line up: same corner on each drawing');
+  await tapAt(...CORNERS.roof);
+  await page.waitForSelector('text=Line up 2 of 2');
+  await tapAt(...CORNERS.floor);
+  await page.waitForSelector('text=Line up again');
+  await page.getByRole('button', { name: 'Fit' }).click();
   await page.waitForTimeout(400);
-  await shot('07-plot30-as');
-  const p30 = await page.locator('#app').innerText();
-  if (/OPP - mirrored/.test(p30)) fail('plot 30 shows mirrored');
-  if (!/Applies to plot 30: Rad position to plots: 30, 31/.test(p30)) fail('plot note not shown for 30');
-  if (!/Hidden \(not plot 30\): Solar PV/.test(p30)) fail('other plot note not hidden');
-  if (!/Setting-out aid only\. Roof plan vent positions are indicative\. Check against the truss layout \/ designer before fixing\./.test(p30)) fail('notice missing');
+  await shot('03-overlay');
+  await canvasShot('03b-overlay-canvas');
+  const al = await page.evaluate(() => window.__roofline.saved().align);
+  console.log('  corners used: roof', al.roofRef.x.toFixed(2), al.roofRef.y.toFixed(2), '| floor', al.floorRef.x.toFixed(2), al.floorRef.y.toFixed(2));
 
-  step('measure tool on plot 30: ridge length');
-  await page.getByRole('button', { name: 'Measure' }).click();
-  await zoomAround(6200 / 2, 6200 / 2, 3);
-  await tapWorld(3100 + 0.3, 3100);
-  await zoomAround(10436 - 3100, 3100, 1);
-  await tapWorld(10436 - 3100, 3100 - 0.2);
-  const mtext = await page.locator('.measure').innerText();
-  console.log('  measure:', mtext);
-  if (!/A→B 4236 mm/.test(mtext)) fail('ridge measure: ' + mtext);
-  await page.getByRole('button', { name: 'Measure' }).click();
+  step('move roof, then undo');
+  await page.getByRole('button', { name: 'Move roof' }).click();
+  const box = await page.locator('.canvaswrap canvas').boundingBox();
+  await page.mouse.move(box.x + 150, box.y + 200);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 170, box.y + 210, { steps: 4 });
+  await page.mouse.up();
+  await page.getByRole('button', { name: 'Done' }).click();
+  await page.waitForSelector('text=Undo roof moves');
+  await page.getByRole('button', { name: 'Undo roof moves' }).click();
+  if (/Undo roof moves/.test(await text())) fail('undo did not clear the move');
 
-  step('export PNG');
-  await page.getByRole('button', { name: 'Export' }).click();
-  const [dl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'PNG' }).click()]);
-  await dl.saveAs(path.join(OUT, 'export-plot30.png'));
-  await page.getByRole('button', { name: 'Close' }).click();
-  const [dl2] = await Promise.all([page.waitForEvent('download'), (async () => { await page.getByRole('button', { name: 'Export' }).click(); await page.getByRole('button', { name: 'PDF' }).click(); })()]);
-  await dl2.saveAs(path.join(OUT, 'export-plot30.pdf'));
-
-  step('site check');
-  await page.getByRole('button', { name: 'Checked on site…' }).click();
-  await page.locator('textarea').fill('E2E: ridge 4236 on app vs drawing 4236');
-  await page.getByRole('button', { name: '✓ Checked on site' }).click();
-  await page.waitForSelector('text=Checked on site ' + new Date().toISOString().slice(0, 10));
-
-  step('plot 31 overlay (Opp)');
-  await page.goto(BASE + '#/plot/31');
-  await page.waitForSelector('text=OPP - mirrored from As drawing');
-  await page.waitForTimeout(400);
-  await shot('08-plot31-opp');
-
-  step('As / Opp test');
-  await page.goto(BASE + `#/mirror/${await page.evaluate(() => window.__roofline.houseTypes[0].id)}/${floorSlot}`);
-  await page.waitForSelector('text=OPP (mirrored)');
-  await page.waitForTimeout(400);
-  await shot('09-mirror-test');
-
-  step('layer picker');
-  await page.goto(BASE + `#/picker/${await page.evaluate(() => window.__roofline.houseTypes[0].id)}/${floorSlot}`);
-  await page.waitForSelector('text=Line groups');
-  await page.waitForTimeout(300);
-  await shot('10-picker');
-
-  step('plot not in schedule + dark mode');
-  await page.emulateMedia({ colorScheme: 'dark' });
-  await page.goto(BASE + '#/plot/999');
-  await page.waitForSelector('text=Plot 999 is not in the schedule.');
-  await page.goto(BASE + '#/plot/31');
-  await page.waitForSelector('text=OPP - mirrored from As drawing');
-  await page.waitForTimeout(400);
-  await shot('11-plot31-dark');
-
-  step('offline reload');
-  await page.waitForFunction(() => navigator.serviceWorker?.controller != null, null, { timeout: 10000 }).catch(() => {});
+  step('reload keeps both drawings and the line-up');
   await page.reload();
-  await page.waitForFunction(() => navigator.serviceWorker?.controller != null, null, { timeout: 10000 });
+  await page.waitForSelector('text=Line up again', { timeout: 60000 });
+  const t = await text();
+  if (!t.includes(path.basename(ROOF)) || !t.includes(path.basename(FLOOR))) fail('drawings not remembered');
+
+  step('works offline');
+  await page.waitForFunction(() => navigator.serviceWorker?.controller != null, null, { timeout: 15000 }).catch(() => {});
+  await page.reload();
+  await page.waitForFunction(() => navigator.serviceWorker?.controller != null, null, { timeout: 15000 });
   await ctx.setOffline(true);
-  await page.goto(BASE + '#/plot/30');
-  await page.waitForSelector('text=Setting-out aid only', { timeout: 15000 });
+  await page.reload();
+  await page.waitForSelector('text=Line up again', { timeout: 60000 });
   await ctx.setOffline(false);
-  console.log('  offline: plot 30 loaded from cache');
 
   if (external.length) fail('external requests: ' + external.join(', '));
-  const realErrors = errors.filter((e) => !/favicon/.test(e));
-  if (realErrors.length) fail('console/page errors: ' + realErrors.join('\n'));
+  const errs = errors.filter((e) => !/favicon/.test(e));
+  if (errs.length) fail('console/page errors: ' + errs.join('\n'));
   console.log('E2E PASSED. Screenshots in', OUT);
 } catch (e) {
   await shot('zz-failure').catch(() => {});

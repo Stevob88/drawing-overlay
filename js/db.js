@@ -70,32 +70,6 @@ export async function requestPersistence() {
   return false;
 }
 
-// ---- backup / restore ----
-const b64 = (buf) => {
-  const a = new Uint8Array(buf);
-  let s = '';
-  for (let i = 0; i < a.length; i += 0x8000) s += String.fromCharCode.apply(null, a.subarray(i, i + 0x8000));
-  return btoa(s);
-};
-const unb64 = (s) => { const bin = atob(s); const a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i); return a.buffer; };
-
-export async function exportBackup() {
-  const files = (await all('files')).map((f) => ({ ...f, data: b64(f.data) }));
-  return {
-    app: 'RoofLine', format: 1, exportedAt: new Date().toISOString(),
-    houseTypes: await all('houseTypes'), kv: await all('kv'), files,
-  };
-}
-
-export async function importBackup(obj) {
-  if (obj?.app !== 'RoofLine' || obj.format !== 1) throw new Error('Not a RoofLine backup file');
-  await clear('extracts');
-  for (const f of obj.files || []) await put('files', { ...f, data: unb64(f.data) });
-  await clear('houseTypes');
-  for (const h of obj.houseTypes || []) await put('houseTypes', h);
-  for (const k of obj.kv || []) await put('kv', k);
-}
-
 export async function wipeAll() {
   for (const s of ['files', 'houseTypes', 'extracts', 'kv']) await clear(s);
 }

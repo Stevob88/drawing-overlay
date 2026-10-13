@@ -1,99 +1,4 @@
-// Pure geometry for calibration, alignment, mirroring and error estimates.
-// "Drawing units" (u) = PDF points in page viewport space (y down, scale 1).
-// "World" = real millimetres, origin at the FLOOR plan reference point, y down.
-
-export const dist = (a, b) => Math.hypot(b.x - a.x, b.y - a.y);
-
-/** Angle of the line a->b in degrees, normalised to (-90, 90] so direction of tapping does not matter. */
-export function lineAngleDeg(a, b) {
-  let d = (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI;
-  while (d <= -90) d += 180;
-  while (d > 90) d -= 180;
-  return d;
-}
-
-/** Smallest difference between two undirected line angles, in degrees (0..90). */
-export function angleDiffDeg(a, b) {
-  let d = Math.abs(a - b) % 180;
-  if (d > 90) d = 180 - d;
-  return d;
-}
-
-/**
- * Scale calibration from two tapped points and the real length.
- * Returns mm per drawing unit. Throws on degenerate input (never guesses).
- */
-export function scaleFromPoints(p1, p2, realMm) {
-  const du = dist(p1, p2);
-  if (!(realMm > 0)) throw new Error('Real length must be a positive number of mm');
-  if (!(du > 0)) throw new Error('The two calibration points are identical');
-  return realMm / du;
-}
-
-/**
- * Build the transform for one drawing: drawing units -> world mm.
- * cal = { p1, p2, realMm, ref, offset? } ; offset = {dx, dy} in mm, position of this
- * drawing's reference point relative to the floor reference (0,0 for the floor plan).
- */
-export function makeTransform(cal) {
-  const k = scaleFromPoints(cal.p1, cal.p2, cal.realMm);
-  const ox = cal.offset?.dx ?? 0;
-  const oy = cal.offset?.dy ?? 0;
-  const rx = cal.ref.x;
-  const ry = cal.ref.y;
-  return {
-    k,
-    toWorld: (x, y) => ({ x: (x - rx) * k + ox, y: (y - ry) * k + oy }),
-    toDrawing: (wx, wy) => ({ x: (wx - ox) / k + rx, y: (wy - oy) / k + ry }),
-    // flat array version for speed: returns [a, c, e, b, d, f] style affine (no rotation)
-    affine: { a: k, d: k, e: ox - rx * k, f: oy - ry * k },
-  };
-}
-
-/**
- * Mirror about the vertical axis x = 0 in world space. The world origin is the floor
- * reference point, so the axis passes through the calibrated reference. Negation is
- * exact in IEEE floating point, so mirror(mirror(p)) === p bit-for-bit.
- */
-export const mirrorX = (x) => (x === 0 ? 0 : -x);
-export const mirrorPoint = (p) => ({ x: mirrorX(p.x), y: p.y });
-
-/** Measure distance in mm between two world points. */
-export const measureMm = (a, b) => dist(a, b);
-
-/**
- * Estimated accuracy for a calibration.
- * pointErrUnits: uncertainty of one tapped point in drawing units (tap precision or snap).
- * imagePxUnits: size of one source image pixel in drawing units (raster only, else 0).
- */
-export function errorEstimate({ k, lengthUnits, pointErrUnits, imagePxUnits = 0 }) {
-  const eUnits = Math.hypot(pointErrUnits, imagePxUnits / 2);
-  const pointMm = eUnits * k;
-  const scaleRel = (Math.SQRT2 * eUnits) / lengthUnits; // relative scale error
-  return {
-    pointMm, // error of a single located point
-    scalePct: scaleRel * 100,
-    per10mMm: scaleRel * 10000 + Math.SQRT2 * pointMm, // over a 10 m measured run
-    imagePxMm: imagePxUnits * k,
-  };
-}
-
-/** Expected mm-per-unit for a stated drawing scale (1:N) with PDF points. */
-export const mmPerUnitForScale = (n) => (n * 25.4) / 72;
-
-/** Find nearest snap candidate (segment endpoint or midpoint) within radius (units). */
-export function nearestSnap(candidates, p, radius) {
-  let best = null;
-  let bd = radius;
-  for (let i = 0; i < candidates.length; i += 2) {
-    const d = Math.hypot(candidates[i] - p.x, candidates[i + 1] - p.y);
-    if (d <= bd) {
-      bd = d;
-      best = { x: candidates[i], y: candidates[i + 1], d };
-    }
-  }
-  return best;
-}
+// Geometry helpers: snapping taps to line ends/crossings, and 2x3 affine matrices.
 
 /**
  * Precision snap: line ends AND line crossings near p (within r drawing units).
@@ -149,6 +54,19 @@ export function pointSegDist(px, py, x1, y1, x2, y2) {
   return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
 }
 
+/**
+ * Roof page point -> floor page point. align = { roofRef, floorRef } (the same building
+ * corner tapped on each drawing), k = roof/floor scale ratio (1 when both are e.g. 1:50),
+ * nudge = extra slide in floor points. Without align, the two sheets sit page-on-page.
+ */
+export function roofToFloorPoint(x, y, align, k = 1, nudge = { x: 0, y: 0 }) {
+  if (!align?.roofRef || !align?.floorRef) return { x: x * k + nudge.x, y: y * k + nudge.y };
+  return {
+    x: (x - align.roofRef.x) * k + align.floorRef.x + nudge.x,
+    y: (y - align.roofRef.y) * k + align.floorRef.y + nudge.y,
+  };
+}
+
 /** 2x3 affine helpers [a,b,c,d,e,f] as in PDF / canvas */
 export const mul = (m, n) => [
   m[0] * n[0] + m[2] * n[1],
@@ -163,3 +81,47 @@ export const invert = (m) => {
   const det = m[0] * m[3] - m[1] * m[2];
   return [m[3] / det, -m[1] / det, -m[2] / det, m[0] / det, (m[2] * m[5] - m[3] * m[4]) / det, (m[1] * m[4] - m[0] * m[5]) / det];
 };
+
+/**
+ * The drawing around a point: flood-fill over a grid of cells that contain linework,
+ * starting at the cell holding `seed`. Separate blocks on the sheet (keys, schedules,
+ * title block) are left out when there is a clear gap. Returns a box or null.
+ */
+export function regionAround(segs, width, height, seed, cell = 10) {
+  const nx = Math.ceil(width / cell);
+  const ny = Math.ceil(height / cell);
+  const ink = new Float32Array(nx * ny);
+  for (let i = 0; i < segs.length; i += 4) {
+    const x = (segs[i] + segs[i + 2]) / 2;
+    const y = (segs[i + 1] + segs[i + 3]) / 2;
+    const cx = Math.floor(x / cell);
+    const cy = Math.floor(y / cell);
+    if (cx < 0 || cy < 0 || cx >= nx || cy >= ny) continue;
+    ink[cy * nx + cx] += Math.hypot(segs[i + 2] - segs[i], segs[i + 3] - segs[i + 1]);
+  }
+  const sx = Math.floor(seed.x / cell);
+  const sy = Math.floor(seed.y / cell);
+  if (sx < 0 || sy < 0 || sx >= nx || sy >= ny) return null;
+  const seen = new Uint8Array(nx * ny);
+  const stack = [sy * nx + sx];
+  seen[stack[0]] = 1;
+  let x0 = sx, x1 = sx, y0 = sy, y1 = sy;
+  while (stack.length) {
+    const c = stack.pop();
+    const cx = c % nx;
+    const cy = (c - cx) / nx;
+    x0 = Math.min(x0, cx); x1 = Math.max(x1, cx); y0 = Math.min(y0, cy); y1 = Math.max(y1, cy);
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const ax = cx + dx;
+        const ay = cy + dy;
+        if (ax < 0 || ay < 0 || ax >= nx || ay >= ny) continue;
+        const a = ay * nx + ax;
+        if (seen[a] || ink[a] < cell * 0.5) continue;
+        seen[a] = 1;
+        stack.push(a);
+      }
+    }
+  }
+  return { x0: x0 * cell, y0: y0 * cell, x1: (x1 + 1) * cell, y1: (y1 + 1) * cell };
+}

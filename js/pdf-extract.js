@@ -1,21 +1,6 @@
-// PDF inspection (Step 0) and vector extraction. Works in the browser and in Node:
-// the caller passes the pdf.js module in, so nothing here touches the network.
+// Reads line geometry from a PDF page so taps can snap to real corners and line
+// crossings, and finds the drawing's stated scale (e.g. "1:50"). Works in browser and Node.
 import { mul, apply } from './geom.js';
-import { classifyText, groupTextLines, extractPlotNotes } from './text.js';
-import { buildGroups } from './classify.js';
-
-const r2 = (v) => Math.round(v * 100) / 100;
-const PT2MM = 25.4 / 72;
-
-const PAPER = [
-  ['A0', 841, 1189], ['A1', 594, 841], ['A2', 420, 594], ['A3', 297, 420], ['A4', 210, 297],
-];
-export function paperName(wMm, hMm) {
-  const a = Math.min(wMm, hMm);
-  const b = Math.max(wMm, hMm);
-  for (const [n, x, y] of PAPER) if (Math.abs(a - x) < 3 && Math.abs(b - y) < 3) return n;
-  return 'custom';
-}
 
 function hex(rgb) {
   if (typeof rgb === 'string') return rgb.toLowerCase();
@@ -36,6 +21,8 @@ function bezier(out, x0, y0, x1, y1, x2, y2, x3, y3) {
     py = y;
   }
 }
+
+const r2 = (v) => Math.round(v * 100) / 100;
 
 const segBox = (a) => {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
@@ -217,225 +204,31 @@ export function walkOperators(OPS, ol, viewportTransform) {
   return { paths, images };
 }
 
-/** Extract text items into viewport space. */
-export async function extractText(page, viewport) {
-  const tc = await page.getTextContent();
-  const vt = viewport.transform;
-  const items = [];
-  for (const it of tc.items) {
-    if (!it.str || !it.str.trim()) continue;
-    const m = mul(vt, it.transform);
-    const size = Math.hypot(m[2], m[3]);
-    const angle = Math.atan2(m[1], m[0]); // radians, y-down space
-    const sx = Math.hypot(m[0], m[1]) / (Math.hypot(it.transform[0], it.transform[1]) || 1);
-    items.push({ str: it.str, x: m[4], y: m[5], size, angle, w: it.width * sx });
-  }
-  return items;
-}
 
 /**
- * Text from PDF markups (FreeText / callout / note comments added in Bluebeam, Acrobat etc).
- * Their drawn boxes come through the operator list; their text does not, so read it here.
- * str = the full comment text (authoritative for plot lists: a list that wraps on screen,
- * e.g. "75/7" + "6/82", is stored unbroken); display = the lines as shown.
+ * Everything needed from one page: size, all line segments (flat [x1,y1,x2,y2,...] in
+ * page points, y down) for snapping, and the stated scale if the drawing says one.
  */
-export async function extractMarkups(page, viewport) {
-  const out = [];
-  let anns = [];
-  try { anns = await page.getAnnotations(); } catch { return out; }
-  for (const a of anns) {
-    if (!['FreeText', 'Text', 'Square', 'Circle', 'Polygon', 'Line'].includes(a.subtype)) continue;
-    const raw = (a.contentsObj?.str ?? a.contents ?? '').trim();
-    if (!raw) continue;
-    const [x0, y0, x1, y1] = viewport.convertToViewportRectangle(a.rect);
-    const display = (Array.isArray(a.textContent) && a.textContent.length ? a.textContent : raw.split(/\r\n|\r|\n/)).map((t) => t.trim()).filter(Boolean);
-    const str = raw.replace(/\s*(\r\n|\r|\n)\s*/g, ' ').replace(/\s+/g, ' ').trim();
-    const h = Math.abs(y1 - y0);
-    const size = Math.max(5, Math.min(14, (h / Math.max(1, display.length)) * 0.75));
-    out.push({
-      str, display, source: 'markup', subtype: a.subtype, cls: classifyText(str),
-      x: Math.min(x0, x1), y: Math.max(y0, y1), angle: 0, size, w: Math.abs(x1 - x0),
-      cx: (x0 + x1) / 2, cy: (y0 + y1) / 2,
-    });
-  }
-  return out;
-}
-
-/** Full vector + text extraction of one page, ready for classification and rendering. */
-export async function extractPage(pdfjs, page) {
+export async function pageGeometry(pdfjs, page) {
   const viewport = page.getViewport({ scale: 1 });
   const ol = await page.getOperatorList();
-  const { paths, images } = walkOperators(pdfjs.OPS, ol, viewport.transform);
-  const textItems = await extractText(page, viewport);
-  const lines = groupTextLines(textItems).map((l) => ({ ...l, cls: classifyText(l.str) }));
-  const markups = await extractMarkups(page, viewport);
-  for (const m of markups) lines.push(m);
-  return { width: viewport.width, height: viewport.height, paths, images, textItems, lines, markups: markups.length, opCount: ol.fnArray.length };
+  const { paths } = walkOperators(pdfjs.OPS, ol, viewport.transform);
+  let n = 0;
+  for (const p of paths) n += p.segs.length;
+  const segs = new Float64Array(n);
+  let i = 0;
+  for (const p of paths) for (const v of p.segs) segs[i++] = v;
+  const tc = await page.getTextContent();
+  const scale = statedScale(tc.items.map((t) => t.str));
+  return { width: viewport.width, height: viewport.height, segs, statedScale: scale };
 }
 
-const ROOM_RE = /\b(BED(ROOM)?\s*\d|BATH(ROOM)?|EN[\s-]?SUITE|LANDING|WC|CLOAKS?|STUDY|STORE|CUPB(OARD)?|AIRING|KITCHEN|LOUNGE|LIVING|DINING|HALL|UTILITY)\b/i;
-const DIM_RE = /^\d{3,5}$/;
-
-/** Step 0 report for one page: vector or raster, text quality, room names and dimensions found. */
-export function inspectExtracted(ex) {
-  const segCount = ex.paths.reduce((n, p) => n + p.segs.length / 4, 0);
-  const pageArea = ex.width * ex.height;
-  let imgArea = 0;
-  let minUnitsPerPx = null;
-  for (const im of ex.images) {
-    const [x0, y0, x1, y1] = im.bbox;
-    imgArea += Math.max(0, Math.min(x1, ex.width) - Math.max(x0, 0)) * Math.max(0, Math.min(y1, ex.height) - Math.max(y0, 0));
-    if (im.unitsPerPx && (minUnitsPerPx === null || im.unitsPerPx > minUnitsPerPx)) minUnitsPerPx = im.unitsPerPx;
+/** "1:50", "1 : 50" ... The most common stated scale on the sheet, or null. */
+export function statedScale(strings) {
+  const counts = new Map();
+  for (const s of strings) {
+    for (const m of String(s).matchAll(/\b1\s*:\s*(\d{1,4})\b/g)) counts.set(+m[1], (counts.get(+m[1]) || 0) + 1);
   }
-  const imageCoverage = Math.min(1, imgArea / pageArea);
-  const rooms = [...new Set(ex.lines.filter((l) => ROOM_RE.test(l.str)).map((l) => l.str.trim()))];
-  const dims = [...new Set(ex.lines.filter((l) => DIM_RE.test(l.str.trim())).map((l) => l.str.trim()))];
-  const reasons = [];
-  let method;
-  if (imageCoverage >= 0.5 && segCount < 1000) {
-    method = 'B';
-    reasons.push(`An image covers ${(imageCoverage * 100).toFixed(0)}% of the page and there are only ${segCount} vector line segments: the drawing is flattened.`);
-  } else if (segCount >= 50) {
-    method = 'A';
-    reasons.push(`${segCount} vector line segments found: the geometry is real vector data.`);
-    if (imageCoverage > 0.1) reasons.push(`WARNING: images also cover ${(imageCoverage * 100).toFixed(0)}% of the page. Anything drawn inside those images will not appear in vector layers.`);
-  } else {
-    method = 'B';
-    reasons.push(imageCoverage > 0
-      ? `Only ${segCount} vector segments and ${(imageCoverage * 100).toFixed(0)}% image coverage: not enough vector data to trust. Treating as raster.`
-      : `Only ${segCount} vector segments and no images: this page has little or no drawing content (text-only page such as a schedule?). Not usable as a drawing.`);
-  }
-  if (ex.markups) reasons.push(`${ex.markups} markup comment(s) with text found (e.g. vent / PV notes added in a PDF editor). Their text is read for plot filtering.`);
-  if (!ex.textItems.length) reasons.push('No extractable text. Text may be outlined as paths or part of an image: room names cannot be labelled and plot-list notes cannot be filtered.');
-  else reasons.push(`${ex.textItems.length} text items extracted.`);
-  const raster = minUnitsPerPx
-    ? { unitsPerPx: minUnitsPerPx, dpi: 72 / minUnitsPerPx }
-    : null;
-  if (raster) reasons.push(`Embedded image resolution approx ${raster.dpi.toFixed(0)} DPI.`);
-  const scales = [...new Set(ex.lines.map((l) => l.str.match(/\b1\s*:\s*(\d{1,4})\b/)?.[1]).filter(Boolean).map(Number))];
-  return {
-    widthPt: r2(ex.width), heightPt: r2(ex.height),
-    widthMm: r2(ex.width * PT2MM), heightMm: r2(ex.height * PT2MM),
-    paper: paperName(ex.width * PT2MM, ex.height * PT2MM),
-    opCount: ex.opCount, pathCount: ex.paths.length, segCount,
-    imageCount: ex.images.length, imageCoverage: r2(imageCoverage), raster,
-    textItems: ex.textItems.length, rooms, dims, statedScales: scales,
-    method, reasons,
-  };
-}
-
-/** Step 0 report for a whole PDF. data: Uint8Array */
-export async function inspectPdf(pdfjs, data, opts = {}) {
-  const doc = await pdfjs.getDocument({ data: data.slice ? data.slice() : data, ...opts }).promise;
-  const pages = [];
-  for (let n = 1; n <= doc.numPages; n++) {
-    const page = await doc.getPage(n);
-    const ex = await extractPage(pdfjs, page);
-    pages.push({ page: n, ...inspectExtracted(ex) });
-  }
-  return { pageCount: doc.numPages, pages };
-}
-
-/** Turn a page extraction into the stored drawing model for a role ('floor' | 'roof'). */
-export function prepareDrawing(ex, role) {
-  const report = inspectExtracted(ex);
-  const groups = report.method === 'A' ? buildGroups(ex.paths, role) : [];
-  return {
-    role, method: report.method, report, autoCrop: autoCrop(groups, role, ex.width, ex.height),
-    width: ex.width, height: ex.height,
-    groups, lines: ex.lines, plotNotes: extractPlotNotes(ex.lines),
-    raster: report.method === 'B' ? { unitsPerPx: report.raster?.unitsPerPx ?? null } : null,
-  };
-}
-
-/**
- * Text items + horizontal table rules for every page (used by the schedule parser).
- * Rules = y of horizontal lines (or thin filled bars) spanning >30% of the page width.
- */
-export async function pdfTextPages(pdfjs, data, opts = {}) {
-  const doc = await pdfjs.getDocument({ data: data.slice ? data.slice() : data, ...opts }).promise;
-  const pages = [];
-  for (let n = 1; n <= doc.numPages; n++) {
-    const page = await doc.getPage(n);
-    const vp = page.getViewport({ scale: 1 });
-    const items = await extractText(page, vp);
-    const { paths } = walkOperators(pdfjs.OPS, await page.getOperatorList(), vp.transform);
-    const ys = [];
-    for (const p of paths) {
-      for (let i = 0; i < p.segs.length; i += 4) {
-        const s = p.segs;
-        if (Math.abs(s[i + 1] - s[i + 3]) < 0.05 && Math.abs(s[i + 2] - s[i]) > 0.3 * vp.width) ys.push(s[i + 1]);
-      }
-    }
-    ys.sort((a, b) => a - b);
-    const rules = [];
-    for (const y of ys) if (!rules.length || y - rules[rules.length - 1] > 0.5) rules.push(y);
-    pages.push({ items, rules });
-  }
-  return pages;
-}
-
-/**
- * Automatic plan area: the largest connected cluster of linework on the sheet, ignoring
- * the sheet border, expanded by 6%, plus any other
- * cluster lying inside it. Keys, schedules and title blocks are separate clusters and
- * fall outside. It is a starting point: the user can set the plan area by hand.
- */
-export function autoCrop(groups, role, width = Infinity, height = Infinity) {
-  // Ignore the sheet border and anything reaching into the outer 5% margin.
-  const short = Math.min(width, height);
-  const edge = 0.05 * short;
-  const nearEdge = (x, y) => x < edge || y < edge || x > width - edge || y > height - edge;
-  const segs = [];
-  for (const g of groups) {
-    if (g.kind !== 'stroke' || g.color === '#ffffff') continue;
-    for (let i = 0; i < g.segs.length; i += 4) {
-      const [x1, y1, x2, y2] = [g.segs[i], g.segs[i + 1], g.segs[i + 2], g.segs[i + 3]];
-      const L = Math.hypot(x2 - x1, y2 - y1);
-      if (L === 0 || L > 0.85 * short) continue;
-      if (nearEdge(x1, y1) || nearEdge(x2, y2)) continue; // border, or stray lines from the sheet corner
-      segs.push(x1, y1, x2, y2);
-    }
-  }
-  const n = segs.length / 4;
-  if (!n) return null;
-  const parent = Array.from({ length: n }, (_, i) => i);
-  const find = (i) => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
-  // connect segments whose endpoints are within ~1.5pt (grid hashing)
-  const cell = 1.5;
-  const at = new Map();
-  for (let i = 0; i < n; i++) {
-    for (const e of [0, 2]) {
-      const gx = Math.floor(segs[i * 4 + e] / cell);
-      const gy = Math.floor(segs[i * 4 + e + 1] / cell);
-      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
-        const k = (gx + dx) * 100003 + (gy + dy);
-        if (at.has(k)) parent[find(i)] = find(at.get(k));
-      }
-      at.set(gx * 100003 + gy, i);
-    }
-  }
-  const comps = new Map();
-  for (let i = 0; i < n; i++) {
-    const r = find(i);
-    const c = comps.get(r) || { len: 0, x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
-    const a = i * 4;
-    c.len += Math.hypot(segs[a + 2] - segs[a], segs[a + 3] - segs[a + 1]);
-    c.x0 = Math.min(c.x0, segs[a], segs[a + 2]); c.x1 = Math.max(c.x1, segs[a], segs[a + 2]);
-    c.y0 = Math.min(c.y0, segs[a + 1], segs[a + 3]); c.y1 = Math.max(c.y1, segs[a + 1], segs[a + 3]);
-    comps.set(r, c);
-  }
-  const all = [...comps.values()];
-  const big = all.reduce((a, b) => (b.len > a.len ? b : a));
-  const m = 0.06 * Math.max(big.x1 - big.x0, big.y1 - big.y0);
-  const box = { x0: big.x0 - m, y0: big.y0 - m, x1: big.x1 + m, y1: big.y1 + m };
-  for (const c of all) {
-    if (c.x0 >= box.x0 && c.x1 <= box.x1 && c.y0 >= box.y0 && c.y1 <= box.y1) {
-      box.x0 = Math.min(box.x0, c.x0 - m); box.x1 = Math.max(box.x1, c.x1 + m);
-      box.y0 = Math.min(box.y0, c.y0 - m); box.y1 = Math.max(box.y1, c.y1 + m);
-    }
-  }
-  box.x0 = Math.max(box.x0, 0); box.y0 = Math.max(box.y0, 0);
-  box.x1 = Math.min(box.x1, width); box.y1 = Math.min(box.y1, height);
-  return box;
+  if (!counts.size) return null;
+  return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
 }

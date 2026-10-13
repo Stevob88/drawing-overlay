@@ -122,3 +122,15 @@ details summary { cursor: pointer; font-weight: 600; min-height: 40px; display: 
 .side { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin: 6px -12px; }
 .side canvas { width: 100%; height: 55vh; background: var(--paper); display: block; }
 .side .lbl { text-align: center; font-weight: 800; padding: 4px; }
+
+/* --- single-screen overlay --- */
+.files { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.filecard { display: flex; flex-direction: column; gap: 6px; margin: 0; min-width: 0; }
+.filelabel { font-weight: 800; display: flex; align-items: center; gap: 6px; }
+.filename { font-size: 14px; overflow-wrap: anywhere; }
+.swatch { width: 14px; height: 14px; border-radius: 3px; display: inline-block; }
+.swatch.roof { background: var(--roof); }
+.swatch.floor { background: var(--floor); }
+.step { background: var(--surface2); border-radius: 10px; padding: 10px 12px; margin: 8px 0; }
+.canvaswrap canvas { height: 66vh; background: #fff; }
+.small { font-size: 14px; }
