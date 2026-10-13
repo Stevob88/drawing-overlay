@@ -565,6 +565,13 @@ async function boot() {
     try { await loadSlot(slot, saved[slot]); } catch (e) { saved[slot] = null; toast(e.message, 5000); }
   }
   render();
-  if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
+  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    // When a new version of the app has been downloaded, reload once so it is used straight
+    // away (drawings and line-up are kept on the device, so nothing is lost).
+    const updating = !!navigator.serviceWorker.controller;
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => { if (updating && !reloaded) { reloaded = true; location.reload(); } });
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((r) => r.update()).catch(() => {});
+  }
 }
 boot();
