@@ -79,7 +79,7 @@ try {
 
   step('plot 30 with no drawings');
   await page.goto(BASE + '#/plot/30');
-  await page.waitForSelector('text=No drawings imported for ELLERTON BELX 2401 AA04');
+  await page.waitForSelector('text=No drawings imported for ELLERTON.');
   await page.getByRole('button', { name: /Import drawings for ELLERTON/ }).click();
   await page.waitForSelector('text=Import house type');
   if ((await page.locator('input').nth(0).inputValue()) !== 'ELLERTON') fail('name not prefilled');

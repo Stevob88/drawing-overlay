@@ -274,7 +274,7 @@ async function plotScreen(n) {
       h('dt', null, 'Roof type'), h('dd', null, res.roofType || '-'))));
   if (res.status !== 'ok') {
     els.push(msg('bad', list(res.warnings)));
-    if (res.status === 'no-drawing') els.push(h('button', { class: 'primary', style: 'width:100%', onclick: () => go(`#/import/new?name=${encodeURIComponent(res.name)}&code=${encodeURIComponent(res.code)}`) }, `Import drawings for ${res.name} ${res.code}`));
+    if (res.status === 'no-drawing') els.push(h('button', { class: 'primary', style: 'width:100%', onclick: () => go(`#/import/new?name=${encodeURIComponent(res.name)}`) }, `Import drawings for ${res.name}`));
     if (res.status === 'bad-row') els.push(h('button', { onclick: () => go('#/schedule') }, 'Fix schedule row'));
     put($app, ...els);
     return;
@@ -350,7 +350,7 @@ async function plotScreen(n) {
   const stamp = () => [
     `Plot ${n}  |  ${res.name}${res.sales ? ' (' + res.sales + ')' : ''}  |  Code ${res.code}  |  ${res.handing}${scene.mirrored ? ' - mirrored from As drawing' : ''}`,
     `Roof over ${SLOT_LABEL[floor]}  |  Roof finish: ${res.finish || '-'}`,
-    `Calibration v${cal.version} ${cal.date.slice(0, 10)} (drawing ${cal.drawingCode})  |  floor 1:${fmt(scene.floor.k / mmPerUnitForScale(1), 1)}, roof 1:${fmt(scene.roof.k / mmPerUnitForScale(1), 1)}  |  scale bar on image`,
+    `Calibration v${cal.version} ${cal.date.slice(0, 10)}${cal.drawingCode ? ` (codes ${cal.drawingCode})` : ''}  |  floor 1:${fmt(scene.floor.k / mmPerUnitForScale(1), 1)}, roof 1:${fmt(scene.roof.k / mmPerUnitForScale(1), 1)}  |  scale bar on image`,
     check ? `Checked on site ${check.date}: ${check.note || ''}` : 'NOT CHECKED ON SITE',
     `Exported ${new Date().toLocaleString('en-GB')}`,
   ];
@@ -399,7 +399,7 @@ function calSummary(ht, floor, cal, floorM, roofM, scene) {
     : `${c.realMm} mm over ${fmt(dist(c.p1, c.p2), 2)} pt → 1:${fmt(scaleFromPoints(c.p1, c.p2, c.realMm) / mmPerUnitForScale(1), 2)}; ±${fmt(e.pointMm, 1)} mm/point, ±${fmt(e.scalePct, 3)}% scale (≈±${fmt(e.per10mMm, 0)} mm over 10 m)` +
     (m.method === 'B' ? `; RASTER: 1 image pixel = ${fmt(e.imagePxMm, 1)} mm` : '; vector'))];
   return h('dl', { class: 'kv' },
-    h('dt', null, 'Version'), h('dd', null, `v${cal.version}, ${cal.date.slice(0, 10)}, drawing ${cal.drawingCode}`),
+    h('dt', null, 'Version'), h('dd', null, `v${cal.version}, ${cal.date.slice(0, 10)}${cal.drawingCode ? `, codes ${cal.drawingCode}` : ''}`),
     row('Floor', cal.floor, eF, floorM), row('Roof', cal.roof, eR, roofM),
     h('dt', null, 'Roof ref offset'), h('dd', null, `dx ${cal.offset.dx} mm, dy ${cal.offset.dy} mm`),
     h('dt', null, 'Rotation diff'), h('dd', null, `${fmt(scene.checks.angleDiffDeg, 3)}°${scene.checks.angleDiffDeg > 0.1 ? ' (OVER 0.1° LIMIT)' : ''}`),
@@ -413,7 +413,7 @@ function siteCheckSheet(ht, floor, cal) {
   const prev = (ht.siteChecks || []).filter((c) => c.floor === floor);
   openSheet(
     h('h2', null, 'Checked on site'),
-    h('p', null, `Record that you compared a measurement on this overlay with a tape on site, for ${ht.name} ${ht.drawingCode}, ${SLOT_LABEL[floor]}, calibration v${cal.version}. A new calibration will need a new check.`),
+    h('p', null, `Record that you compared a measurement on this overlay with a tape on site, for ${ht.name}, ${SLOT_LABEL[floor]}, calibration v${cal.version}. A new calibration will need a new check.`),
     h('label', null, 'Date'), date, h('label', null, 'What did you check? (measurements, result)'), note,
     h('button', {
       class: 'primary', style: 'width:100%;margin-top:10px',
@@ -486,7 +486,7 @@ function typesScreen() {
         h('button', {
           class: 'small danger',
           onclick: async () => {
-            if (!(await askConfirm(`Delete ${ht.name} ${ht.drawingCode} and its calibrations? (PDF files stay in storage until "Clear all data".)`))) return;
+            if (!(await askConfirm(`Delete ${ht.name} and its calibrations? (PDF files stay in storage until "Clear all data".)`))) return;
             await db.del('houseTypes', ht.id);
             state.houseTypes = state.houseTypes.filter((x) => x.id !== ht.id);
             route();
@@ -520,7 +520,7 @@ function reportView(rep, selectedPage, onPick) {
 async function importScreen(id) {
   const q = new URLSearchParams(location.hash.split('?')[1] || '');
   const existing = id && id !== 'new' && !id.startsWith('new?') ? htById(id) : null;
-  const ht = existing ? structuredClone(existing) : { id: uid(), name: q.get('name') || '', aliases: [], drawingCode: q.get('code') || '', drawings: {}, calibrations: {}, layers: {}, siteChecks: [], createdAt: new Date().toISOString() };
+  const ht = existing ? structuredClone(existing) : { id: uid(), name: q.get('name') || '', aliases: [], drawingCode: '', drawings: {}, calibrations: {}, layers: {}, siteChecks: [], createdAt: new Date().toISOString() };
   const name = h('input', { value: ht.name, placeholder: 'e.g. ELLERTON' });
   const aliases = h('input', { value: (ht.aliases || []).join(', '), placeholder: 'e.g. Ellerton Elder' });
   const code = h('input', { value: ht.drawingCode, placeholder: 'e.g. BELX 2401 AA04' });
@@ -559,8 +559,10 @@ async function importScreen(id) {
     msg('info', 'PDFs are read on this phone only. Each page is inspected (vector or raster, text, room names) before you use it.'),
     h('label', null, 'House type name (as in the schedule "house type" column)'), name,
     h('label', null, 'Other names that match (comma separated, e.g. sales name)'), aliases,
-    h('label', null, 'Drawing code(s) - must match the schedule code column. If these drawings serve several variants, list them all, comma separated (e.g. BELX 2401 AA04, BELX 2401 AA05)'), code,
-    h('p', { class: 'muted' }, 'A plot only uses these drawings when BOTH the code and one of the names match its schedule row.'),
+    h('p', { class: 'muted' }, 'Every plot whose house type matches this name (or one of the other names) uses these drawings.'),
+    h('details', { open: !!ht.drawingCode }, h('summary', null, 'Advanced: limit to certain drawing codes (optional)'),
+      h('p', { class: 'muted' }, 'Leave blank to use these drawings for every plot of this house type. Only fill this in if one house type has different drawings for different codes.'),
+      code),
     slotBox('roof'), FLOORS.map(slotBox),
     h('button', {
       class: 'primary', style: 'width:100%',
@@ -568,10 +570,11 @@ async function importScreen(id) {
         ht.name = name.value.trim();
         ht.aliases = aliases.value.split(',').map((s) => s.trim()).filter(Boolean);
         ht.drawingCode = code.value.trim();
-        if (!ht.name || !ht.drawingCode) { toast('Name and drawing code are required'); return; }
+        if (!ht.name) { toast('Type the house type name (as in the schedule)'); return; }
         const mine = codesOf(ht).map(normCode);
-        const clash = state.houseTypes.find((x) => x.id !== ht.id && x.name.toUpperCase() === ht.name.toUpperCase() && codesOf(x).some((c) => mine.includes(normCode(c))));
-        if (clash) { toast(`${clash.name} ${clash.drawingCode} already uses one of these codes`); return; }
+        const overlap = (x) => !mine.length || !codesOf(x).length || codesOf(x).some((c) => mine.includes(normCode(c)));
+        const clash = state.houseTypes.find((x) => x.id !== ht.id && x.name.toUpperCase() === ht.name.toUpperCase() && overlap(x));
+        if (clash) { toast(`${clash.name} already has drawings. Edit that house type instead.`); return; }
         for (const [slot, p] of Object.entries(pending)) {
           const pg = p.report.pages.find((x) => x.page === p.page);
           ht.drawings[slot] = { fileId: p.fileId, fileName: p.fileName, page: p.page, method: pg.method, report: pg, importedAt: new Date().toISOString() };
@@ -1085,7 +1088,7 @@ function settingsScreen() {
         floorsOf(ht).map((f) => {
           const cals = ht.calibrations?.[f] || [];
           return h('div', null, h('strong', null, `Roof over ${SLOT_LABEL[f]}: `), cals.length ? '' : 'none',
-            list(cals.slice().reverse().map((c) => `v${c.version} ${c.date.slice(0, 10)} drawing ${c.drawingCode}, roof ${c.roof.realMm} mm / floor ${c.floor.realMm} mm, offset ${c.offset.dx},${c.offset.dy}, rotation ${fmt(c.angleDiffDeg, 3)}°${calProblem(ht, f, c) ? ' (OUT OF DATE)' : ''}${siteCheck(ht, f, c) ? ' - site checked ' + siteCheck(ht, f, c).date : ''}`)),
+            list(cals.slice().reverse().map((c) => `v${c.version} ${c.date.slice(0, 10)}, roof ${c.roof.realMm} mm / floor ${c.floor.realMm} mm, offset ${c.offset.dx},${c.offset.dy}, rotation ${fmt(c.angleDiffDeg, 3)}°${calProblem(ht, f, c) ? ' (OUT OF DATE)' : ''}${siteCheck(ht, f, c) ? ' - site checked ' + siteCheck(ht, f, c).date : ''}`)),
             h('button', { class: 'small', onclick: () => go(`#/calibrate/${ht.id}/${f}`) }, 'Calibrate'));
         }))) : h('p', { class: 'muted' }, 'No house types.')),
     h('div', { class: 'card' }, h('h2', null, 'Backup'),
@@ -1129,7 +1132,7 @@ function scheduleScreen() {
   const s = state.pendingSchedule || (state.schedule && structuredClone(state.schedule));
   if (!s) { go('#/settings'); return; }
   const isPending = !!state.pendingSchedule;
-  let flaggedOnly = s.rows.some((r) => r.flags?.length && !r.reviewed);
+  let flaggedOnly = false;
   let search = '';
   const m = s.mapping;
   const tableBox = h('div');
@@ -1149,7 +1152,7 @@ function scheduleScreen() {
   };
   const renderTable = () => {
     const rows = s.rows.filter((r) => (!flaggedOnly || (r.flags?.length && !r.reviewed)) && (!search || String(r.plot) === search));
-    put(tableBox, h('div', { class: 'tablewrap' }, h('table', null,
+    put(tableBox, h('p', { class: 'muted' }, `Showing ${rows.length} of ${s.rows.length} plots${flaggedOnly ? ' (flagged only)' : ''}. Scroll the table to see them all.`), h('div', { class: 'tablewrap' }, h('table', null,
       h('thead', null, h('tr', null, h('th', null, 'OK'), s.columns.map((c) => h('th', null, c)), h('th', null, 'Issues'), h('th', null, ''))),
       h('tbody', null, rows.map((r) => h('tr', { class: `${r.flags?.length ? 'flag' : ''} ${r.reviewed ? 'reviewed' : ''}` },
         h('td', null, h('input', { type: 'checkbox', checked: !!r.reviewed, onchange: (e) => { r.reviewed = e.target.checked; renderSummary(); } })),

@@ -30,13 +30,17 @@ export function resolvePlot(plotNo, schedule, houseTypes) {
     sales: row.cells[m.salesCol] || '',
   };
   if (!handing) return { status: 'bad-row', ...info, warnings: [...warnings, `Handing "${info.handingRaw}" for plot ${plotNo} is not As or Opp. Mirroring cannot be decided. Fix the schedule row.`] };
-  if (!code) return { status: 'bad-row', ...info, warnings: [...warnings, `No drawing code in column "${m.codeCol}" for plot ${plotNo}.`] };
-  const byCode = houseTypes.filter((h) => codesOf(h).some((c) => normCode(c) === normCode(code)));
-  const matches = byCode.filter((h) => [h.name, ...(h.aliases || [])].some((n) => normName(n) === normName(name)));
+
+  const nameMatch = (h) => [h.name, ...(h.aliases || [])].some((n) => normName(n) === normName(name));
+  // A house type with no drawing codes matches on name alone; one with codes needs code AND name.
+  const byCode = houseTypes.filter((h) => !codesOf(h).length || codesOf(h).some((c) => normCode(c) === normCode(code)));
+  const matches = byCode.filter(nameMatch);
   if (matches.length === 1) return { status: 'ok', ...info, houseType: matches[0], warnings };
   if (matches.length > 1) return { status: 'ambiguous', ...info, candidates: matches, warnings: [...warnings, `${matches.length} imported house types match code ${code} and name ${name}.`] };
-  if (byCode.length) {
+  if (byCode.some((h) => codesOf(h).length)) {
     return { status: 'no-drawing', ...info, warnings: [...warnings, `A drawing with code ${code} is imported, but under the name "${byCode.map((h) => h.name).join('", "')}", not "${name}". Names must match too (or add "${name}" as an alias on that house type).`] };
   }
-  return { status: 'no-drawing', ...info, warnings: [...warnings, `No drawings imported for ${name} ${code}.`] };
+  const restricted = houseTypes.filter((h) => nameMatch(h) && codesOf(h).length);
+  if (restricted.length) return { status: 'no-drawing', ...info, warnings: [...warnings, `Drawings for ${name} are imported, but limited to drawing code(s) ${restricted.map((h) => h.drawingCode).join(' / ')}. This plot is ${code || 'blank'}. Clear the code on that house type to use them for every ${name} plot.`] };
+  return { status: 'no-drawing', ...info, warnings: [...warnings, `No drawings imported for ${name}.`] };
 }

@@ -263,3 +263,11 @@ test('one house type can serve several drawing codes (still needs code AND name)
   assert.equal(resolvePlot(30, s, [multi]).status, 'ok'); // AA04 plot
   assert.equal(resolvePlot(62, s, [multi]).status, 'no-drawing'); // AA00 not listed
 });
+
+test('house type without drawing codes matches every plot of that name', async () => {
+  const s = await syntheticSchedule();
+  const plain = { id: 'p', name: 'ELLERTON', aliases: [], drawingCode: '' };
+  for (const n of [1, 30, 31]) assert.equal(resolvePlot(n, s, [plain]).status, 'ok', `plot ${n}`);
+  assert.equal(resolvePlot(4, s, [plain]).status, 'no-drawing'); // HADLEY
+  assert.equal(resolvePlot(999, s, [plain]).status, 'not-in-schedule');
+});

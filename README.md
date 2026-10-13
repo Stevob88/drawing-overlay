@@ -47,9 +47,10 @@ After changing any app file, run `npm run build:sw` so phones pick up the new ve
    - missing or duplicated plot numbers against the expected range (1–181);
    - highlighted **uncertain rows** (wrapped cells like plot 63, blanks, unrecognised
      handing). Fix the cells, tick **OK**, then **Save schedule**.
-2. **House types → Import house type.** Name `ELLERTON` (as in the schedule), other names
-   (e.g. `Ellerton Elder`), and drawing code exactly as in the code column (e.g.
-   `BELX 2401 AA04`). Choose the roof plan PDF and the first floor plan PDF, and pick the
+2. **House types → Import house type.** Type the house type name as it appears in the
+   schedule (e.g. `Ellerton`) and any other names (e.g. `Elder`). No drawing code is
+   needed: every plot of that house type uses these drawings. (Optional, under Advanced:
+   limit the drawings to certain codes when one house type has different drawings per code.) Choose the roof plan PDF and the first floor plan PDF, and pick the
    page. Each page gets a Step 0 report (vector or raster, text, room names, dimensions) and
    is assigned **Method A** (vector) or **Method B** (raster) with the reasons shown.
 3. **Set up the overlay** (once per house type). The overlay is a rough guide to where
@@ -87,9 +88,9 @@ site variation sheet:
   schedule (the roof plan has `756`) turns the note into a warning, never a silent filter.
 - These drawings serve **two variants**: `BELX 2401 AA04` (plots 30, 31, 82, 83, 110–113)
   and `BELX 2401 AA05` (16, 17, 26, 27, 66, 67, 71, 72, 75, 76, 124, 125, 133, 134). The
-  differences between them are in the plot-filtered notes. Enter both codes on one house
-  type: `BELX 2401 AA04, BELX 2401 AA05`. `BELX 2403 AA05` (plots 7, 9, 48, 50) needs its
-  own drawings.
+  differences between them are in the plot-filtered notes. With no code limit set, every
+  Ellerton plot uses these drawings, including `BELX 2403 AA05` (plots 7, 9, 48, 50),
+  which strictly has its own drawings.
 - Most lines are the same 0.24pt black, so the floor plan shows walls (grey layer and black
   poché) in strong blue and everything else faint. Windows are in the faint layer.
 - The house roof finish column holds a key letter (e.g. `B`), not a description.
@@ -113,7 +114,7 @@ set the plan area. Choices are saved per house type.
 | Plan area | Automatic: the largest connected cluster of wall (or roof outline) lines plus 15%, which hides title blocks. You can override it. |
 | Opp handing | Geometry mirrored about the vertical axis through the floor reference, with the same transform for roof and floor. Text is re-placed, never mirrored. Dimension text is hidden on Opp. Raster drawings mirror the whole image (text included) and say so. |
 | Plot notes | Notes with "plot(s): …" lists show only if they include the plot. Lists that can't be read reliably show a warning instead. |
-| Lookup | Code AND name must match. Missing plots, duplicates and unknown handing are refused with a message, never substituted. |
+| Lookup | By house type name (and other names). If a house type is limited to drawing codes, the code must match too. Missing plots, duplicates and unknown handing are refused with a message, never substituted. |
 
 ## Tests
 

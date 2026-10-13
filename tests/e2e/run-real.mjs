@@ -75,17 +75,19 @@ try {
   const sum = await page.locator('.msg').allInnerTexts();
   console.log('  ', sum.join(' | ').slice(0, 300));
   if (!sum.some((t) => /181 plots, 1-181, none missing, no duplicates/.test(t))) fail('schedule summary');
+  const shown = await page.locator('.tablewrap tbody tr').count();
+  console.log('  review table rows shown:', shown);
+  if (shown !== 181) fail('review table should list all 181 plots');
   await page.getByText('I confirm this mapping is correct').click();
   await page.getByRole('button', { name: 'Save schedule' }).click();
   await page.waitForSelector('text=Plot schedule');
 
   step('plot 30 -> import drawings');
   await page.goto(BASE + '#/plot/30');
-  await page.waitForSelector('text=No drawings imported for Ellerton BELX 2401 AA04');
+  await page.waitForSelector('text=No drawings imported for Ellerton.');
   await page.getByRole('button', { name: /Import drawings for/ }).click();
   await page.waitForSelector('text=Import house type');
   await page.locator('input').nth(1).fill('Elder');
-  await page.locator('input').nth(2).fill('BELX 2401 AA04, BELX 2401 AA05');
   await choose('Choose PDF', path.join(REALDIR, 'ellerton_roof.pdf'), 0);
   await page.waitForSelector('text=Method A: vector', { timeout: 60000 });
   await choose('Choose PDF', path.join(REALDIR, 'ellerton_first_floor.pdf'), 1);
@@ -140,8 +142,8 @@ try {
   t = await text();
   console.log('  plot 16 notes:\n   ' + (t.split('Plot-list notes for plot 16')[1] || '').split('Calibration details')[0].trim().replace(/\n+/g, '\n   '));
   await page.goto(BASE + '#/plot/7');
-  await page.waitForSelector('text=No drawings imported');
-  console.log('  plot 7 (BELX 2403 AA05):', ((await text()).match(/No drawings imported[^\n]*/) || [''])[0]);
+  await page.waitForSelector('text=Roof opacity', { timeout: 60000 });
+  console.log('  plot 7 (BELX 2403 AA05, no code limit set): overlay shown by house type name');
 
   step('As/Opp test + pickers');
   const id = await page.evaluate(() => window.__roofline.houseTypes[0].id);
