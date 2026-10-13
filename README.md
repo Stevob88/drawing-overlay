@@ -24,7 +24,8 @@ drawn (vent boxes, tile vents, notes). Optional:
 - **Floor plan: walls and room names only** (on by default): shows just the walls (the grey
   wall layer plus stud partitions drawn as paired lines) and room names such as BED 1,
   EN-SUITE, BATH, LANDING. Untick to see the full floor drawing. Floor plans without a
-  separate wall layer always show in full.
+  separate wall layer get the same clean-up as the roof instead ("hide measurements, keys
+  and notes"): dimensions, keys, schedules and title block are left out, room names kept.
 - **Roof plan: hide measurements and sheet notes** (on by default): the roof is drawn from
   its own lines without dimension lines, measurements, title block or keys. Kept: roof
   lines, wall hatching, tile vent symbols, short roof notes (SVP, EF to tile vent, Rwp,
