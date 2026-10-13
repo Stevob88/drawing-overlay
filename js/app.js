@@ -46,9 +46,9 @@ function toast(t, ms = 2500) {
 }
 const save = () => db.kvSet('overlay', saved).catch(() => {});
 
-function pickFile() {
+function pickFile(accept = 'application/pdf,.pdf') {
   return new Promise((resolve) => {
-    const i = h('input', { type: 'file', accept: 'application/pdf,.pdf', style: 'display:none' });
+    const i = h('input', { type: 'file', accept, style: 'display:none' });
     i.addEventListener('change', () => { resolve(i.files[0] || null); i.remove(); });
     document.body.append(i);
     i.click();
@@ -406,6 +406,8 @@ const ICONS = {
   download: '<path d="M12 4v11M7 10.5l5 5 5-5"/><path d="M5 19.5h14"/>',
   print: '<path d="M7 9V4h10v5"/><rect x="3.5" y="9" width="17" height="8" rx="1.5"/><path d="M7 14h10v6H7z"/>',
   trash: '<path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13M10 11v5.5M14 11v5.5"/>',
+  send: '<path d="M4 12l16-8-6 16-2.5-6.5z"/><path d="M11.5 13.5L20 4"/>',
+  open: '<path d="M4 19V6a1.5 1.5 0 011.5-1.5h4l2 2.5h7A1.5 1.5 0 0120 8.5V19z"/><path d="M12 10v6M9 13l3 3 3-3"/>',
   undo: '<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/>',
 };
 function ico(name) {
@@ -575,6 +577,98 @@ async function printOverlay() {
   }
 }
 
+// ---------------------------------------------------------------- send to phone
+/*
+ * A job file holds both PDFs plus the line-up and settings, so a job set up on one device
+ * opens the same on another. The app never sends it anywhere: you move it yourself (email,
+ * AirDrop, Teams, OneDrive). Layout: "ROOFLINE-JOB1\n", 4-byte header length, JSON header,
+ * roof PDF bytes, floor PDF bytes.
+ */
+const JOB_MAGIC = 'ROOFLINE-JOB1\n';
+const JOB_SETTINGS = ['align', 'nudge', 'flip', 'scaleOverride', 'opacity', 'colour', 'wallsOnly', 'cleanRoof', 'crop'];
+
+async function makeJob() {
+  const head = { v: 1, created: new Date().toISOString(), settings: {}, files: {} };
+  for (const k of JOB_SETTINGS) head.settings[k] = saved[k];
+  const parts = [];
+  for (const slot of ['roof', 'floor']) {
+    const f = await db.get('files', saved[slot].fileId);
+    if (!f) throw new Error('the drawings are no longer stored on this device');
+    head.files[slot] = { name: saved[slot].name, page: saved[slot].page || 1, size: f.data.byteLength };
+    parts.push(f.data);
+  }
+  const json = new TextEncoder().encode(JSON.stringify(head));
+  const len = new Uint8Array(4);
+  new DataView(len.buffer).setUint32(0, json.length);
+  return new Blob([JOB_MAGIC, len, json, ...parts], { type: 'application/octet-stream' });
+}
+
+function readJob(buf) {
+  const u8 = new Uint8Array(buf);
+  const m = JOB_MAGIC.length;
+  if (new TextDecoder().decode(u8.subarray(0, m)) !== JOB_MAGIC) {
+    throw new Error(new TextDecoder().decode(u8.subarray(0, 5)) === '%PDF-' ? 'that is a PDF drawing. Use Choose PDF for drawings.' : 'that is not a RoofLine job file.');
+  }
+  const len = new DataView(buf, m, 4).getUint32(0);
+  const head = JSON.parse(new TextDecoder().decode(u8.subarray(m + 4, m + 4 + len)));
+  let off = m + 4 + len;
+  const files = {};
+  for (const slot of ['roof', 'floor']) {
+    const f = head.files?.[slot];
+    if (!f || off + f.size > buf.byteLength) throw new Error('the job file is incomplete. Send it again.');
+    files[slot] = { ...f, data: buf.slice(off, off + f.size) };
+    off += f.size;
+  }
+  return { head, files };
+}
+
+const jobName = () => `RoofLine ${(saved.floor?.name || 'job').replace(/\.pdf$/i, '')}.roofline`;
+
+async function sendJob() {
+  try {
+    const file = new File([await makeJob()], jobName(), { type: 'application/octet-stream' });
+    if (touchDevice() && navigator.canShare?.({ files: [file] })) {
+      try { await navigator.share({ files: [file] }); } catch (e) { if (e.name !== 'AbortError') throw e; }
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    const a = h('a', { href: url, download: file.name, style: 'display:none' });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    toast(`Saved "${file.name}" to your downloads. Email it to yourself (or put it on Teams / OneDrive), then on your phone open it with "Open job file".`, 12000);
+  } catch (e) {
+    toast('Could not make the job file: ' + e.message, 6000);
+  }
+}
+
+async function openJob() {
+  const file = await pickFile(''); // any file: iPhone greys out file types it does not know
+  if (!file) return;
+  toast('Opening job…', 20000);
+  try {
+    const { head, files } = readJob(await file.arrayBuffer());
+    setFullView(false);
+    for (const slot of ['roof', 'floor']) {
+      const fileId = await db.saveFile(files[slot].name, files[slot].data);
+      saved[slot] = { fileId, name: files[slot].name, page: files[slot].page || 1 };
+    }
+    for (const k of JOB_SETTINGS) if (head.settings?.[k] !== undefined) saved[k] = head.settings[k];
+    saved.nudge = saved.nudge || { x: 0, y: 0 };
+    saved.scaleOverride = saved.scaleOverride || { roof: null, floor: null };
+    for (const slot of ['roof', 'floor']) await loadSlot(slot, saved[slot]);
+    mode = 'view';
+    show = 'both';
+    await save();
+    db.requestPersistence();
+    render();
+    toast(saved.align ? 'Job opened, lined up and ready.' : 'Job opened. Line it up to finish.', 4000);
+  } catch (e) {
+    toast('Could not open the job: ' + e.message, 6000);
+  }
+}
+
 /** Remove both drawings from this device and start again with an empty screen. */
 async function clearAll() {
   if (!confirm('Clear both drawings and start again? They will be removed from this device.')) return;
@@ -622,9 +716,11 @@ function render() {
       tool('flip', saved.flip ? 'Flipped ✓' : 'Flip (opp. hand)', () => { saved.flip = !saved.flip; save(); render(); }, { class: saved.flip ? 'on' : '', pressed: !!saved.flip }))) : null;
 
   const canExport = both && saved.align && !picking && mode !== 'move';
-  const actions = hasDrawing && !picking ? h('div', { class: `tools ${canExport ? 'three' : 'one'} actions a-actions` },
+  const canSend = both && !picking && mode !== 'move';
+  const actions = hasDrawing && !picking ? h('div', { class: `tools ${['one', 'one', 'two', 'three', 'four'][1 + !!canSend + 2 * !!canExport]} actions a-actions` },
     canExport ? tool('download', touchDevice() ? 'Save' : 'Download', downloadOverlay) : null,
     canExport ? tool('print', 'Print', printOverlay) : null,
+    canSend ? tool('send', touchDevice() ? 'Send job' : 'Send to phone', sendJob) : null,
     tool('trash', 'Clear', clearAll, { class: 'danger' })) : null;
 
   const pct = Math.round(saved.opacity * 100);
@@ -641,7 +737,8 @@ function render() {
   const notice = both ? h('p', { class: 'notice a-notice', role: 'note' }, ico('info'), NOTICE) : null;
   const hint = instruction();
   const layout = h('div', { class: `layout ${hasDrawing ? '' : 'empty'} ${hint ? 'hinted' : ''}` },
-    h('div', { class: `files a-files ${both ? 'compact' : ''}` }, slotCard('roof', 'Roof plan'), slotCard('floor', 'Floor plan')),
+    h('div', { class: `files a-files ${both ? 'compact' : ''}` }, slotCard('roof', 'Roof plan'), slotCard('floor', 'Floor plan'),
+      picking ? null : h('button', { class: 'small linkbtn jobbtn', onclick: openJob }, ico('open'), hasDrawing ? 'Open job file' : 'Open a job sent from your computer')),
     hint && !fullView ? (hint.classList.add('a-hint'), hint) : null,
     hasDrawing ? h('div', { class: `canvaswrap a-canvas ${picking ? 'aiming' : ''} ${fullView ? 'full' : ''}` },
       fullView && hint ? h('div', { class: 'fullhint' }, hint) : null,
