@@ -80,6 +80,25 @@ try {
     console.log(`  ${name}: ${n} drawn pixels`);
     if (n < 30) fail(`${name} is missing from the overlay (${n} px)`);
   }
+  // changing the window size after the view was fitted must not cut the building off
+  const bottomVisible = () => page.evaluate(() => { const v = window.__roofline.viewer(); const hb = window.__roofline.homeBox(); return { h: Math.round(v.h), bottom: Math.round(hb.y1 * v.view.s + v.view.ty), top: Math.round(hb.y0 * v.view.s + v.view.ty), right: Math.round(hb.x1 * v.view.s + v.view.tx), w: Math.round(v.w) }; });
+  for (const [vw, vh] of [[1280, 700], [1280, 1100], [1000, 800], [1500, 900]]) {
+    await page.setViewportSize({ width: vw, height: vh });
+    await page.waitForTimeout(500);
+    const r = await bottomVisible();
+    console.log(`  window ${vw}x${vh}: canvas ${r.w}x${r.h}, house bottom at ${r.bottom}, top ${r.top}, right ${r.right}`);
+    if (r.bottom > r.h || r.top < 0 || r.right > r.w) fail(`building cut off after resizing to ${vw}x${vh}`);
+  }
+  // but a view the user zoomed themselves is not thrown away by a resize
+  await page.getByRole('button', { name: 'Zoom in' }).click();
+  const before = await page.evaluate(() => window.__roofline.viewer().view.s);
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await page.waitForTimeout(400);
+  const after = await page.evaluate(() => window.__roofline.viewer().view.s);
+  if (Math.abs(after - before) > 1e-9) fail('a resize reset the zoom the user chose');
+  await page.getByRole('button', { name: 'Fit' }).click();
+  await page.waitForTimeout(200);
+
   // the key block (far right) is hidden; switching the crop off brings it back
   const keyRect = [940, 100, 1200, 540];
   const keyOn = await inkIn(keyRect);

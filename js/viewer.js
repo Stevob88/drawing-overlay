@@ -36,9 +36,16 @@ export class Viewer {
   resize() {
     const r = this.canvas.getBoundingClientRect();
     const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    const oldW = this.w;
+    const oldH = this.h;
     this.dpr = dpr;
     this.w = r.width;
     this.h = r.height;
+    // The canvas changed size (window resized, browser bar shown, layout changed). Keep what
+    // the user was looking at in view: re-fit if the view is still the automatic fit, else keep
+    // the centre of the view where it was.
+    if (this._fit && this.w && this.h) this._applyFit();
+    else if (oldW && oldH) { this.view.tx += (this.w - oldW) / 2; this.view.ty += (this.h - oldH) / 2; }
     this.canvas.width = Math.max(1, Math.round(r.width * dpr));
     this.canvas.height = Math.max(1, Math.round(r.height * dpr));
     this.redraw();
@@ -46,11 +53,17 @@ export class Viewer {
 
   fit(b, pad = 24) {
     if (!b || !this.w) return;
+    this._fit = { b, pad };
+    this._applyFit();
+    this.redraw();
+  }
+
+  _applyFit() {
+    const { b, pad } = this._fit;
     const bw = Math.max(1e-9, b.x1 - b.x0);
     const bh = Math.max(1e-9, b.y1 - b.y0);
     const s = Math.min((this.w - 2 * pad) / bw, (this.h - 2 * pad) / bh);
     this.view = { s, tx: (this.w - bw * s) / 2 - b.x0 * s, ty: (this.h - bh * s) / 2 - b.y0 * s };
-    this.redraw();
   }
 
   toWorld(sx, sy) { return { x: (sx - this.view.tx) / this.view.s, y: (sy - this.view.ty) / this.view.s }; }
@@ -166,6 +179,7 @@ export class Viewer {
           this.view.tx = mx - (last.mx - this.view.tx) * k;
           this.view.ty = my - (last.my - this.view.ty) * k;
           this.view.s *= k;
+          this._fit = null;
         }
         last = { d, mx: mid.x - r.left, my: mid.y - r.top };
         this.redraw();
@@ -177,6 +191,7 @@ export class Viewer {
         this.redraw();
         return;
       }
+      this._fit = null;
       this.view.tx += e.clientX - prev.x;
       this.view.ty += e.clientY - prev.y;
       this.redraw();
@@ -209,6 +224,7 @@ export class Viewer {
       const mx = e.clientX - r.left;
       const my = e.clientY - r.top;
       const k = Math.exp(-e.deltaY * 0.0015);
+      this._fit = null;
       this.view.tx = mx - (mx - this.view.tx) * k;
       this.view.ty = my - (my - this.view.ty) * k;
       this.view.s *= k;
@@ -217,6 +233,7 @@ export class Viewer {
   }
 
   zoomBy(k) {
+    this._fit = null;
     const mx = this.w / 2;
     const my = this.h / 2;
     this.view.tx = mx - (mx - this.view.tx) * k;

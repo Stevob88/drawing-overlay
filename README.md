@@ -37,6 +37,10 @@ drawn (vent boxes, tile vents, notes). Optional:
 The two drawings and the line-up are remembered on the phone, so it opens where you left
 off. Choose a different PDF at any time with **Change**.
 
+The view follows the window: if the window or screen changes size after the drawing has been
+fitted (maximise, full screen, rotating a phone), it is fitted again so no part of the building
+is cut off. Once you zoom or pan yourself, your view is kept.
+
 Keys, schedules and sheet notes are hidden by finding the plan itself: the separate blocks of
 linework on the sheet (once dimensions and the sheet border are removed) are kept when they are
 at least 30% the size of the largest block or contain a room name, so a spread-out building
