@@ -1021,7 +1021,7 @@ async function pickerScreen(id, slot) {
   renderList();
   put($app, topbar(`Layers: ${ht.name} ${SLOT_LABEL[slot]}`, '#/types'),
     msg('info', 'Faint lines are hidden in the overlay; dark lines are shown; orange is the selected group. Auto-classification is a guess: check it here. Choices are saved for this house type.'),
-    msg('info', s.crop ? 'Plan area (orange dashed box): set by you.' : m.autoCrop ? 'Plan area (orange dashed box): automatic, from the walls/roof outline + 15%. Anything outside it is hidden from the overlay.' : 'No plan area: whole page is used.'),
+    msg('info', s.crop ? 'Plan area (orange dashed box): set by you.' : m.autoCrop ? 'Plan area (orange dashed box): automatic, around the main drawing. Anything outside it is hidden from the overlay. Use Set plan area if it is wrong.' : 'No plan area: whole page is used.'),
     h('div', { class: 'canvaswrap short' }, canvas, h('div', { class: 'canvasbtns' }, h('button', { onclick: () => viewer.zoomBy(2) }, '+'), h('button', { onclick: () => viewer.zoomBy(0.5) }, '−'))),
     info,
     h('div', { class: 'toolbar' },
@@ -1037,7 +1037,7 @@ async function pickerScreen(id, slot) {
       h('button', { class: 'danger', onclick: async () => { if (!(await askConfirm('Reset all layer choices for this drawing to automatic?'))) return; ht.layers[slot] = null; await save(); route(); } }, 'Reset to automatic')),
     listBox);
   viewer.resize();
-  viewer.fit({ x0: 0, y0: 0, x1: m.width, y1: m.height }, 8);
+  viewer.fit(s.crop || m.autoCrop || { x0: 0, y0: 0, x1: m.width, y1: m.height }, 8);
   if (showPdf) { underlay = await renderRegion(ht.drawings[slot].fileId, ht.drawings[slot].page, null, 200); viewer.redraw(); }
 }
 

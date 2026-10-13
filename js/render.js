@@ -21,7 +21,13 @@ function strokeSegs(ctx, segs, view) {
 }
 
 function drawText(ctx, view, t, colour, pal) {
-  const px = Math.max(10, Math.min(30, t.sizeMm * view.s));
+  // Text is drawn at its true size on the drawing, like the PDF. Only labels the user needs
+  // at a glance (room names, plot-note tags) get a minimum size; anything else that would
+  // be smaller than 5px is skipped instead of being blown up over the linework.
+  const truePx = t.sizeMm * view.s;
+  const minPx = t.minPx ?? 0;
+  if (!minPx && truePx < 5) return;
+  const px = Math.min(30, Math.max(minPx, truePx));
   const x = t.x * view.s + view.tx;
   const y = t.y * view.s + view.ty;
   const rows = (t.lines?.length ? t.lines : [t.str]).slice();
@@ -88,7 +94,7 @@ function drawLayer(ctx, view, layer, colour, pal, o) {
   }
   ctx.globalAlpha = base;
   ctx.setLineDash([]);
-  for (const t of layer.texts) drawText(ctx, view, t, colour, pal);
+  for (const t of layer.texts) drawText(ctx, view, (t.cls === 'room' || t.cls === 'plotnote') ? { ...t, minPx: 9 } : t, colour, pal);
 }
 
 /** Overlay scene: floor (blue) under roof (red, adjustable opacity). */
