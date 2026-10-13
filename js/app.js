@@ -12,7 +12,7 @@ const FLOOR_TINT = '#0047c2';
 const NOTICE = 'Setting-out aid only. Vent positions on the roof plan are indicative. Check against the truss layout / designer before fixing.';
 
 // saved between visits (IndexedDB, this device only)
-let saved = { roof: null, floor: null, align: null, nudge: { x: 0, y: 0 }, opacity: 0.6, colour: true };
+let saved = { roof: null, floor: null, align: null, nudge: { x: 0, y: 0 }, opacity: 0.6, colour: true, flip: false, wallsOnly: true };
 // loaded drawings: { doc, pages, page, canvas, scale, width, height, segs, statedScale, tinted }
 const dr = { roof: null, floor: null };
 let mode = 'view'; // view | pick-roof | pick-floor | move
@@ -69,7 +69,8 @@ function overlapBox() {
 }
 
 /** Best first view: the house on the floor plan, found around the tapped corner. */
-function homeBox() {
+function homeBox() { return flipBox(homeBoxUnflipped()); }
+function homeBoxUnflipped() {
   const f = dr.floor;
   if (!saved.align?.floorRef || !f) return overlapBox();
   const seed = saved.align.floorRef;
@@ -83,9 +84,18 @@ function homeBox() {
   return { x0: box.x0 - m, y0: box.y0 - m, x1: box.x1 + m, y1: box.y1 + m };
 }
 
+// Flip (opposite hand): mirror the whole overlay left-right about a vertical line through
+// the lined-up corner. Roof and floor flip together, so they stay lined up.
+const flipping = () => saved.flip && mode !== 'pick-roof' && mode !== 'pick-floor';
+const axis = () => (saved.align?.floorRef ? saved.align.floorRef.x : (dr.floor?.width || 0) / 2);
+const fx = (x) => (flipping() ? 2 * axis() - x : x);
+const flipBox = (b) => (flipping() ? { x0: fx(b.x1), y0: b.y0, x1: fx(b.x0), y1: b.y1 } : b);
+const showWallsOnly = () => saved.wallsOnly && !!dr.floor?.wallSegs;
+
 // ---------------------------------------------------------------- drawing
-function drawPage(ctx, view, d, img, dpr, m) {
+function drawPage(ctx, view, d, img, dpr, m0) {
   // m = [a, b, c, d, e, f] page points -> floor points (identity for the floor itself)
+  const m = flipping() ? [-m0[0], 0, 0, m0[3], 2 * axis() - m0[4], m0[5]] : m0;
   const s = view.s;
   const k = 1 / d.scale;
   ctx.setTransform(dpr * s * m[0] * k, 0, 0, dpr * s * m[3] * k, dpr * (s * m[4] + view.tx), dpr * (s * m[5] + view.ty));
@@ -100,7 +110,10 @@ function draw(ctx, view, info) {
   ctx.imageSmoothingEnabled = true;
   if (mode === 'pick-roof' && dr.roof) { drawPage(ctx, view, dr.roof, dr.roof.canvas, dpr, [1, 0, 0, 1, 0, 0]); return marks(ctx, view, dpr, saved.align?.roofRef); }
   if (mode === 'pick-floor' && dr.floor) { drawPage(ctx, view, dr.floor, dr.floor.canvas, dpr, [1, 0, 0, 1, 0, 0]); return marks(ctx, view, dpr, saved.align?.floorRef); }
-  if (dr.floor) drawPage(ctx, view, dr.floor, saved.colour ? dr.floor.tinted : dr.floor.canvas, dpr, [1, 0, 0, 1, 0, 0]);
+  if (dr.floor) {
+    if (showWallsOnly()) drawWalls(ctx, view, dpr);
+    else drawPage(ctx, view, dr.floor, saved.colour ? dr.floor.tinted : dr.floor.canvas, dpr, [1, 0, 0, 1, 0, 0]);
+  }
   if (dr.roof) {
     const o = roofToFloor(0, 0);
     const k = roofRatio();
@@ -110,7 +123,42 @@ function draw(ctx, view, info) {
     drawPage(ctx, view, dr.roof, saved.colour ? dr.roof.tinted : dr.roof.canvas, dpr, [k, 0, 0, k, o.x, o.y]);
     ctx.restore();
   }
-  if (saved.align) marks(ctx, view, dpr, { x: saved.align.floorRef.x + saved.nudge.x, y: saved.align.floorRef.y + saved.nudge.y });
+  if (dr.floor && showWallsOnly()) drawRooms(ctx, view, dpr); // room names on top, never mirrored
+  if (saved.align) marks(ctx, view, dpr, { x: fx(saved.align.floorRef.x + saved.nudge.x), y: saved.align.floorRef.y + saved.nudge.y });
+}
+
+/** Floor plan reduced to its wall layer. */
+function drawWalls(ctx, view, dpr) {
+  const g = dr.floor.wallSegs;
+  const { s, tx, ty } = view;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.strokeStyle = saved.colour ? FLOOR_TINT : '#333333';
+  ctx.lineWidth = 1;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  for (let i = 0; i < g.length; i += 4) {
+    ctx.moveTo(fx(g[i]) * s + tx, g[i + 1] * s + ty);
+    ctx.lineTo(fx(g[i + 2]) * s + tx, g[i + 3] * s + ty);
+  }
+  ctx.stroke();
+}
+
+/** Room names, upright and readable even when flipped. */
+function drawRooms(ctx, view, dpr) {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (const r of dr.floor.rooms || []) {
+    const px = Math.max(11, Math.min(26, r.size * view.s));
+    const x = fx(r.x) * view.s + view.tx;
+    const y = r.y * view.s + view.ty;
+    ctx.font = `bold ${px}px system-ui, -apple-system, sans-serif`;
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+    ctx.strokeText(r.str, x, y);
+    ctx.fillStyle = saved.colour ? '#002f86' : '#000000';
+    ctx.fillText(r.str, x, y);
+  }
 }
 
 function marks(ctx, view, dpr, p) {
@@ -221,7 +269,11 @@ function render() {
       h('div', { class: 'toolbar' },
         h('button', { class: saved.align ? '' : 'primary', onclick: startLineUp }, saved.align ? 'Line up again' : 'Line up'),
         h('button', { class: mode === 'move' ? 'on' : '', onclick: () => { mode = mode === 'move' ? 'view' : 'move'; if (mode === 'view') save(); render(); } }, mode === 'move' ? 'Done' : 'Move roof'),
-        h('button', { onclick: () => viewer.fit(homeBox(), 8) }, 'Fit')),
+        h('button', { onclick: () => viewer.fit(homeBox(), 8) }, 'Fit'),
+        h('button', { class: saved.flip ? 'on' : '', 'aria-pressed': String(!!saved.flip), onclick: () => { saved.flip = !saved.flip; save(); render(); } }, saved.flip ? 'Flipped ✓' : 'Flip (opp. hand)')),
+      dr.floor.wallSegs
+        ? h('label', { class: 'inline' }, h('input', { id: 'walls', type: 'checkbox', checked: saved.wallsOnly, onchange: (e) => { saved.wallsOnly = e.target.checked; save(); viewer.redraw(); } }), 'Floor plan: walls and room names only')
+        : h('p', { class: 'muted small' }, 'This floor plan has no separate wall layer, so the whole floor drawing is shown.'),
       h('label', { for: 'opacity' }, 'Roof see-through'),
       h('input', { id: 'opacity', type: 'range', min: 10, max: 100, value: Math.round(saved.opacity * 100), oninput: (e) => { saved.opacity = e.target.value / 100; viewer.redraw(); }, onchange: save }),
       h('label', { class: 'inline' }, h('input', { id: 'colour', type: 'checkbox', checked: saved.colour, onchange: (e) => { saved.colour = e.target.checked; save(); render(); } }), 'Colour the drawings (roof red, floor blue)'),
@@ -232,6 +284,7 @@ function render() {
     h('div', { class: 'files' }, slotCard('roof', 'Roof plan'), slotCard('floor', 'Floor plan')),
     instruction() || '',
     both || dr.roof || dr.floor ? h('div', { class: 'canvaswrap' }, canvas,
+      both && saved.flip && !picking ? h('div', { class: 'modebar' }, h('span', { class: 'mirrorbadge' }, 'FLIPPED - opposite hand. Roof writing reads backwards.')) : null,
       h('div', { class: 'canvasbtns' },
         h('button', { 'aria-label': 'Zoom in', onclick: () => viewer.zoomBy(1.6) }, '+'),
         h('button', { 'aria-label': 'Zoom out', onclick: () => viewer.zoomBy(1 / 1.6) }, '−'))) : '',
@@ -251,7 +304,7 @@ function render() {
       const d = mode === 'pick-roof' ? dr.roof : mode === 'pick-floor' ? dr.floor : null;
       return d ? snapNear(d.segs, w, r) : null;
     },
-    onDrag: (dx, dy) => { saved.nudge = { x: saved.nudge.x + dx, y: saved.nudge.y + dy }; },
+    onDrag: (dx, dy) => { saved.nudge = { x: saved.nudge.x + (flipping() ? -dx : dx), y: saved.nudge.y + dy }; },
   });
   viewer.setMode(picking ? 'point' : mode === 'move' ? 'drag' : 'pan');
   viewer.resize();

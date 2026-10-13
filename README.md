@@ -19,6 +19,12 @@ The roof then sits on top of the floor plan, see-through, showing everything exa
 drawn (vent boxes, tile vents, notes). Optional:
 - **Roof see-through** slider.
 - **Colour the drawings**: roof red, floor blue. Untick to see the original colours.
+- **Flip (opp. hand)**: mirrors roof and floor together for opposite-hand plots, about the
+  corner you lined up on. Room names stay readable; writing on the roof plan reads backwards.
+- **Floor plan: walls and room names only** (on by default): shows just the walls (the grey
+  wall layer plus stud partitions drawn as paired lines) and room names such as BED 1,
+  EN-SUITE, BATH, LANDING. Untick to see the full floor drawing. Floor plans without a
+  separate wall layer always show in full.
 - **Move roof**: drag to nudge it. **Undo roof moves** puts it back.
 - **Line up again**, **Fit** (zooms to the house).
 

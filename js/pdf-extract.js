@@ -220,7 +220,100 @@ export async function pageGeometry(pdfjs, page) {
   for (const p of paths) for (const v of p.segs) segs[i++] = v;
   const tc = await page.getTextContent();
   const scale = statedScale(tc.items.map((t) => t.str));
-  return { width: viewport.width, height: viewport.height, segs, statedScale: scale };
+  return {
+    width: viewport.width, height: viewport.height, segs, statedScale: scale,
+    wallSegs: wallLayer(paths, scale || 50), rooms: roomLabels(tc.items, viewport.transform),
+  };
+}
+
+const lum = (hex) => (parseInt(hex.slice(1, 3), 16) + parseInt(hex.slice(3, 5), 16) + parseInt(hex.slice(5, 7), 16)) / 3;
+const isGrey = (hex) => {
+  const v = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  return Math.max(...v) - Math.min(...v) < 30;
+};
+
+/**
+ * The wall layer of a floor plan. CAD templates like the Barratt ones draw walls (outline +
+ * hatch) in mid grey and everything else in black, so the wall layer is the mid-grey line
+ * colour carrying the most linework. Returns null when no such layer stands out.
+ */
+export function wallLayer(paths, scaleN = 50) {
+  const byColour = new Map();
+  let total = 0;
+  for (const p of paths) {
+    if (!p.stroke) continue;
+    total += p.segs.length;
+    const c = p.color;
+    if (!isGrey(c) || lum(c) < 60 || lum(c) > 215) continue;
+    byColour.set(c, (byColour.get(c) || 0) + p.segs.length);
+  }
+  const best = [...byColour.entries()].sort((a, b) => b[1] - a[1])[0];
+  if (!best || best[1] < 0.2 * total) return null; // a wall layer carries a big share of the linework
+  const out = [];
+  for (const p of paths) if (p.stroke && p.color === best[0]) for (const v of p.segs) out.push(v);
+  // partitions only inside the outline of the main wall layer (skips wall-key symbols etc.)
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (let i = 0; i < out.length; i += 2) { x0 = Math.min(x0, out[i]); x1 = Math.max(x1, out[i]); y0 = Math.min(y0, out[i + 1]); y1 = Math.max(y1, out[i + 1]); }
+  const inside = (x, y) => x >= x0 - 1 && x <= x1 + 1 && y >= y0 - 1 && y <= y1 + 1;
+  const part = partitionLines(paths, scaleN);
+  for (let i = 0; i < part.length; i += 4) {
+    if (inside(part[i], part[i + 1]) && inside(part[i + 2], part[i + 3])) out.push(part[i], part[i + 1], part[i + 2], part[i + 3]);
+  }
+  return Float64Array.from(out);
+}
+
+/**
+ * Stud partitions drawn as two thin black lines 50-130 mm apart (63 / 98 mm studs on the
+ * Barratt sheets). Finds straight black lines that run alongside a parallel partner at that
+ * spacing. Furniture, beds and dimension lines rarely pair up that tightly.
+ */
+export function partitionLines(paths, scaleN = 50) {
+  const mmPerPt = (scaleN * 25.4) / 72;
+  const lo = 50 / mmPerPt;
+  const hi = 130 / mmPerPt;
+  const minLen = 250 / mmPerPt; // ignore short bits (fittings, symbols)
+  const H = [];
+  const V = [];
+  for (const p of paths) {
+    if (!p.stroke || !isGrey(p.color) || lum(p.color) > 60) continue; // black-ish lines only
+    const a = p.segs;
+    for (let i = 0; i < a.length; i += 4) {
+      const [x1, y1, x2, y2] = [a[i], a[i + 1], a[i + 2], a[i + 3]];
+      if (Math.abs(y1 - y2) < 0.05 && Math.abs(x2 - x1) >= minLen) H.push({ c: y1, a: Math.min(x1, x2), b: Math.max(x1, x2), s: [x1, y1, x2, y2] });
+      else if (Math.abs(x1 - x2) < 0.05 && Math.abs(y2 - y1) >= minLen) V.push({ c: x1, a: Math.min(y1, y2), b: Math.max(y1, y2), s: [x1, y1, x2, y2] });
+    }
+  }
+  const out = [];
+  for (const L of [H, V]) {
+    L.sort((p, q) => p.c - q.c);
+    const keep = new Set();
+    for (let i = 0; i < L.length; i++) {
+      for (let j = i + 1; j < L.length && L[j].c - L[i].c <= hi; j++) {
+        if (L[j].c - L[i].c < lo) continue;
+        const ov = Math.min(L[i].b, L[j].b) - Math.max(L[i].a, L[j].a);
+        if (ov >= 0.6 * Math.min(L[i].b - L[i].a, L[j].b - L[j].a)) { keep.add(i); keep.add(j); }
+      }
+    }
+    for (const i of keep) out.push(...L[i].s);
+  }
+  return out;
+}
+
+const ROOM = /^(BED(ROOM)?\s*\d*|MASTER\s+BED(ROOM)?|BATH(ROOM)?|EN[\s-]?SUITE|LANDING|WC|ST|STORE|CUPB(OARD)?|AIRING(\s+CUPBOARD)?|STUDY|KITCHEN(\s*\/\s*DINING)?|LOUNGE|LIVING(\s+ROOM)?|DINING(\s+ROOM)?|HALL(WAY)?|UTILITY|DRESSING(\s+ROOM)?|SHOWER(\s+ROOM)?|CLOAKS?(\s+ROOM)?|FAMILY(\s+ROOM)?|GARAGE|PLANT)$/i;
+
+/** Room names (BED 1, EN-SUITE, BATH, LANDING ...) with their centre in page points. */
+export function roomLabels(items, vt) {
+  const out = [];
+  for (const it of items) {
+    const str = (it.str || '').trim().replace(/\s+/g, ' ');
+    if (!str || str.length > 20 || !ROOM.test(str)) continue;
+    const m = mul(vt, it.transform);
+    if (Math.abs(m[1]) > 0.01 * Math.abs(m[0])) continue; // horizontal labels only
+    const size = Math.hypot(m[2], m[3]);
+    const w = it.width * Math.hypot(vt[0], vt[1]);
+    out.push({ str, x: m[4] + w / 2, y: m[5] - size * 0.35, size });
+  }
+  return out;
 }
 
 /** "1:50", "1 : 50" ... The most common stated scale on the sheet, or null. */

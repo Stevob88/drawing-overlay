@@ -82,3 +82,18 @@ test('REAL: first view finds the house on the floor plan from the tapped corner'
   assert.ok(b.x0 <= 425 && b.x1 >= 743 && b.y0 <= 106 && b.y1 >= 700, JSON.stringify(b));
   assert.ok(b.x1 - b.x0 < 0.5 * floor.width, 'should not take in the whole sheet');
 });
+
+test('REAL floor plan: wall layer and room names are found', { skip: !have && 'no real drawings' }, async () => {
+  const floor = await geometry(real('ellerton_first_floor.pdf'));
+  assert.ok(floor.wallSegs && floor.wallSegs.length / 4 > 1000, 'wall layer');
+  const names = floor.rooms.map((r) => r.str);
+  for (const n of ['BED 1', 'BED 2', 'BED 3', 'BATH', 'EN-SUITE', 'LANDING']) assert.ok(names.includes(n), n);
+  // labels sit inside the house (outside walls roughly x 425-743, y 106-700)
+  for (const r of floor.rooms) assert.ok(r.x > 425 && r.x < 743 && r.y > 106 && r.y < 700, `${r.str} at ${r.x},${r.y}`);
+});
+
+test('synthetic floor plan has no grey wall layer, so the full drawing is used', async () => {
+  const g = await geometry(path.join(SYN, 'ellerton_first_floor.pdf'));
+  assert.equal(g.wallSegs, null);
+  assert.ok(g.rooms.some((r) => r.str === 'EN-SUITE'));
+});

@@ -83,6 +83,21 @@ try {
   const al = await page.evaluate(() => window.__roofline.saved().align);
   console.log('  corners used: roof', al.roofRef.x.toFixed(2), al.roofRef.y.toFixed(2), '| floor', al.floorRef.x.toFixed(2), al.floorRef.y.toFixed(2));
 
+  step('flip for opposite hand, then back');
+  await page.getByRole('button', { name: 'Flip (opp. hand)' }).click();
+  await page.waitForSelector('text=FLIPPED - opposite hand');
+  await page.waitForTimeout(400);
+  await canvasShot('04-flipped-canvas');
+  await page.getByRole('button', { name: 'Flipped ✓' }).click();
+  if (/FLIPPED - opposite hand/.test(await text())) fail('flip did not turn off');
+  if (REALRUN) {
+    step('full floor drawing toggle');
+    await page.getByText('Floor plan: walls and room names only').click();
+    await page.waitForTimeout(300);
+    await canvasShot('05-full-floor-canvas');
+    await page.getByText('Floor plan: walls and room names only').click();
+  }
+
   step('move roof, then undo');
   await page.getByRole('button', { name: 'Move roof' }).click();
   const box = await page.locator('.canvaswrap canvas').boundingBox();
