@@ -100,7 +100,8 @@ try {
   step('plot 30 not calibrated -> calibrate');
   await page.goto(BASE + '#/plot/30');
   await page.waitForSelector('text=Not calibrated yet.');
-  await page.getByRole('button', { name: 'Calibrate now' }).click();
+  await page.getByRole('button', { name: /Set up overlay/ }).click();
+  await page.getByRole('button', { name: 'Full calibration' }).click();
   await page.waitForSelector('text=1. Roof plan: scale');
   await page.waitForTimeout(300);
   await zoomAround(plate.x0, plate.y0, 4);
@@ -149,7 +150,7 @@ try {
   if (!md || Math.abs(parseFloat(md[1])) > 1) fail('measure check diff: ' + (md && md[1]));
   if (!/Rotation between the reference lines: 0\.000°/.test(chk)) fail('rotation not 0');
   await page.getByRole('button', { name: 'Save calibration' }).click();
-  await page.waitForSelector('text=Alignment NOT yet checked on site');
+  await page.waitForSelector('text=Not tape-checked on site yet');
 
   step('plot 30 overlay (As)');
   await page.waitForTimeout(400);

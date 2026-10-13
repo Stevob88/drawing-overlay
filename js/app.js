@@ -293,8 +293,8 @@ async function plotScreen(n) {
   const cal = currentCal(ht, floor);
   const prob = calProblem(ht, floor, cal);
   if (prob) {
-    els.push(msg('bad', prob, ' The overlay is not shown until the roof and floor plans are calibrated and aligned.'),
-      h('button', { class: 'primary', style: 'width:100%', onclick: () => go(`#/calibrate/${ht.id}/${floor}`) }, 'Calibrate now'));
+    els.push(msg('warn', prob, ' Set up the overlay once for this house type: tap the same building corner on the roof plan and on the floor plan.'),
+      h('button', { class: 'primary', style: 'width:100%', onclick: () => go(`#/calibrate/${ht.id}/${floor}`) }, 'Set up overlay (quick: 2 taps)'));
     put($app, ...els);
     return;
   }
@@ -303,7 +303,7 @@ async function plotScreen(n) {
   const check = siteCheck(ht, floor, cal);
   els.push(check
     ? msg('ok', `Checked on site ${check.date}: ${check.note || ''}`)
-    : msg('warn', 'Alignment NOT yet checked on site with a tape for this calibration. Use Measure and compare with a tape, then tick "Checked on site".'));
+    : h('p', { class: 'muted', style: 'font-size:14px' }, 'Rough guide. Not tape-checked on site yet (optional: Measure, then "Checked on site").'));
   if (scene.warnings.length) els.push(msg('warn', list(scene.warnings)));
 
   const opts = { pal: P, opacity: state.settings.opacity ?? 0.8, showFloor: true, showRoof: true, bitmaps, marks: null, dpr: 1 };
@@ -393,8 +393,9 @@ async function plotScreen(n) {
 function calSummary(ht, floor, cal, floorM, roofM, scene) {
   const eF = calError(cal.floor, floorM);
   const eR = calError(cal.roof, roofM);
-  const row = (label, c, e, m) => [h('dt', null, label), h('dd', null,
-    `${c.realMm} mm over ${fmt(dist(c.p1, c.p2), 2)} pt → 1:${fmt(scaleFromPoints(c.p1, c.p2, c.realMm) / mmPerUnitForScale(1), 2)}; ±${fmt(e.pointMm, 1)} mm/point, ±${fmt(e.scalePct, 3)}% scale (≈±${fmt(e.per10mMm, 0)} mm over 10 m)` +
+  const row = (label, c, e, m) => [h('dt', null, label), h('dd', null, cal.mode === 'quick'
+    ? `Scale from the drawing's stated 1:${cal.statedScale?.[label === 'Roof' ? 'roof' : 'floor']} (not measured); aligned on the tapped corner`
+    : `${c.realMm} mm over ${fmt(dist(c.p1, c.p2), 2)} pt → 1:${fmt(scaleFromPoints(c.p1, c.p2, c.realMm) / mmPerUnitForScale(1), 2)}; ±${fmt(e.pointMm, 1)} mm/point, ±${fmt(e.scalePct, 3)}% scale (≈±${fmt(e.per10mMm, 0)} mm over 10 m)` +
     (m.method === 'B' ? `; RASTER: 1 image pixel = ${fmt(e.imagePxMm, 1)} mm` : '; vector'))];
   return h('dl', { class: 'kv' },
     h('dt', null, 'Version'), h('dd', null, `v${cal.version}, ${cal.date.slice(0, 10)}, drawing ${cal.drawingCode}`),
@@ -603,7 +604,26 @@ async function calibrateScreen(id, floor) {
     offset: usePrev ? { ...prev.offset } : { dx: 0, dy: 0 },
     offsetConfirmed: false, measure: null, note: '',
   };
-  const STEPS = [
+  // Quick setup: scale from the drawing's own stated scale (e.g. 1:50), then one tap on the
+  // same building corner on each drawing. Good enough for a rough guide; full calibration
+  // (measured dimensions, offset, rotation check) stays available.
+  const stated = (m) => (m.report?.statedScales?.length === 1 ? m.report.statedScales[0] : null);
+  const quickOK = !!(stated(models.roof) && stated(models.floor));
+  let mode = quickOK && !(usePrev && prev.mode !== 'quick') ? 'quick' : 'full';
+  const setQuickScale = () => {
+    for (const which of ['roof', 'floor']) {
+      const k = mmPerUnitForScale(stated(models[which]));
+      Object.assign(d[which], { p1: { x: 0, y: 0 }, p2: { x: 1000, y: 0 }, realMm: k * 1000, pointErrUnits: 0.5, p1SnapType: 'stated', p2SnapType: 'stated' });
+    }
+    d.offset = { dx: 0, dy: 0 };
+    d.offsetConfirmed = true;
+  };
+  const QUICK = [
+    { key: 'roofRef', which: 'roof', title: 'Roof plan: tap a corner', help: () => `Scale is taken from the drawing (1:${stated(models.roof)}). Tap an outside corner of the building walls on the ROOF plan, e.g. the top-left corner.` },
+    { key: 'floorRef', which: 'floor', title: `${SLOT_LABEL[floor]}: tap the same corner`, help: () => `Scale from the drawing (1:${stated(models.floor)}). Tap the SAME outside corner of the walls on the ${SLOT_LABEL[floor].toUpperCase()} plan.` },
+    { key: 'check', which: 'overlay', title: 'Check and save', help: 'Look at the preview: the roof walls (red) should sit on the floor walls (blue). If they do, save.' },
+  ];
+  const FULL = [
     { key: 'roofDim', which: 'roof', title: 'Roof plan: scale', help: 'Pick a known dimension on the ROOF plan, e.g. the "10113 outer faces of wall plates" dimension. Place A and B exactly on its ends, then type the real length.' },
     { key: 'roofRef', which: 'roof', title: 'Roof plan: reference point', help: 'Tap the reference point on the ROOF plan, e.g. the outer corner of the wall plate (outer face). You will say where it is relative to the floor plan reference in step 5.' },
     { key: 'floorDim', which: 'floor', title: `${SLOT_LABEL[floor]}: scale`, help: `Pick a known dimension on the ${SLOT_LABEL[floor].toUpperCase()} plan, e.g. the 10436 overall masonry width. Place A and B on its ends and type the real length.` },
@@ -611,6 +631,8 @@ async function calibrateScreen(id, floor) {
     { key: 'offset', which: 'overlay', title: 'Reference offset', help: '' },
     { key: 'check', which: 'overlay', title: 'Check and save', help: '' },
   ];
+  let STEPS = mode === 'quick' ? QUICK : FULL;
+  if (mode === 'quick') setQuickScale();
   let step = 0;
   let target = 'p1';
   let snapAll = false;
@@ -762,7 +784,13 @@ async function calibrateScreen(id, floor) {
     const nav = h('div', { class: 'grid2', style: 'margin-top:10px' },
       h('button', { disabled: step === 0, onclick: () => setStep(step - 1) }, '‹ Back'),
       step < STEPS.length - 1 ? h('button', { class: 'primary', disabled: !canNext(), onclick: () => setStep(step + 1) }, 'Next ›') : h('span'));
-    const body = [h('h2', null, `${step + 1}. ${st.title}`), st.help ? h('p', null, st.help) : null];
+    const body = [
+      quickOK ? h('div', { class: 'grid2' },
+        h('button', { class: `small ${mode === 'quick' ? 'on' : ''}`, onclick: () => setMode('quick') }, 'Quick setup (2 taps)'),
+        h('button', { class: `small ${mode === 'full' ? 'on' : ''}`, onclick: () => setMode('full') }, 'Full calibration')) : null,
+      h('h2', null, `${step + 1}. ${st.title}`),
+      st.help ? h('p', null, typeof st.help === 'function' ? st.help() : st.help) : null,
+    ];
     if (st.which !== 'overlay') {
       const m = models[st.which];
       body.push(h('p', null, h('span', { class: `badge ${m.method === 'A' ? 'a' : 'b'}` }, m.method === 'A' ? 'Vector: points snap to line ends (green SNAP)' : 'Raster: no snapping, zoom right in')));
@@ -831,11 +859,12 @@ async function calibrateScreen(id, floor) {
     if (!overlayScene) return [msg('bad', 'Complete steps 1-4 first.')];
     const ch = overlayScene.checks;
     const out = [];
-    out.push(ch.angleDiffDeg > 0.1
+    if (mode === 'quick') out.push(msg('info', `Quick setup: scale taken from the drawings' stated 1:${stated(models.roof)} / 1:${stated(models.floor)}, aligned on the corner you tapped. A rough guide for marking out; use Full calibration if you ever need more.`));
+    else out.push(ch.angleDiffDeg > 0.1
       ? msg('bad', `Rotation between the reference lines: ${fmt(ch.angleDiffDeg, 3)}° - over the 0.1° limit. Re-place the A/B points (zoom in, use snapping) or the drawings are not square to each other.`)
       : msg('ok', `Rotation between the reference lines: ${fmt(ch.angleDiffDeg, 3)}° (limit 0.1°).`));
     out.push(h('p', null, `Floor 1:${fmt(ch.kFloor / mmPerUnitForScale(1), 2)}, roof 1:${fmt(ch.kRoof / mmPerUnitForScale(1), 2)}${Math.abs(ch.scaleRatio - 1) > 0.005 ? ` - scales differ by ${fmt((ch.scaleRatio - 1) * 100, 2)}%. Fine only if the drawings really are at different scales.` : ''}`));
-    out.push(h('h3', null, 'Measure check (required)'),
+    out.push(h('h3', null, 'Measure check (optional)'),
       h('p', null, 'Drag to place A and B on the overlay across a dimension you know (e.g. a room width or the ridge length), then type what it should be.'));
     const exp = h('input', { type: 'text', inputmode: 'decimal', placeholder: 'Expected mm', value: d.measure?.expected ?? '' });
     const res = h('div');
@@ -849,12 +878,12 @@ async function calibrateScreen(id, floor) {
       put(res, Math.abs(diff) <= 5 ? msg('ok', `Measured ${fmt(measured, 0)} mm, expected ${expected} mm: difference ${fmt(diff, 1)} mm.`)
         : msg('warn', `Measured ${fmt(measured, 0)} mm, expected ${expected} mm: difference ${fmt(diff, 1)} mm. Check your calibration points before saving.`));
     };
-    exp.addEventListener('input', () => { showRes(); saveBtn.disabled = !d.measure; });
+    exp.addEventListener('input', () => { showRes(); });
     showRes();
     const note = h('textarea', { rows: 2, placeholder: 'Note (optional): which dimensions and corners you used' });
     note.addEventListener('input', () => { d.note = note.value; });
     const saveBtn = h('button', {
-      class: 'primary', style: 'width:100%;margin-top:10px', disabled: !d.measure,
+      class: 'primary', style: 'width:100%;margin-top:10px',
       onclick: async () => {
         const list0 = ht.calibrations?.[floor] || [];
         const version = (list0.at(-1)?.version || 0) + 1;
@@ -865,6 +894,7 @@ async function calibrateScreen(id, floor) {
           floorFileId: ht.drawings[floor].fileId, floorPage: ht.drawings[floor].page,
           roof: clean(d.roof), floor: clean(d.floor), offset: d.offset,
           angleDiffDeg: overlayScene.checks.angleDiffDeg, measureCheck: d.measure, note: d.note,
+          mode, statedScale: mode === 'quick' ? { roof: stated(models.roof), floor: stated(models.floor) } : null,
         }] };
         await saveHT(ht);
         toast(`Calibration v${version} saved`);
@@ -872,8 +902,17 @@ async function calibrateScreen(id, floor) {
       },
     }, 'Save calibration');
     out.push(h('label', null, 'Expected length (mm)'), exp, res, note, saveBtn,
-      h('p', { class: 'muted' }, 'Saving creates a new version; earlier versions are kept. The site-check tick must be redone for the new version.'));
+      h('p', { class: 'muted' }, 'Saving creates a new version; earlier versions are kept.'));
     return out;
+  }
+
+  async function setMode(m) {
+    if (m === mode) return;
+    mode = m;
+    STEPS = mode === 'quick' ? QUICK : FULL;
+    if (mode === 'quick') setQuickScale();
+    else for (const which of ['roof', 'floor']) Object.assign(d[which], { p1: null, p2: null, realMm: null });
+    await setStep(0);
   }
 
   async function setStep(i) {

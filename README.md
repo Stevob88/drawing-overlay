@@ -52,19 +52,16 @@ After changing any app file, run `npm run build:sw` so phones pick up the new ve
    `BELX 2401 AA04`). Choose the roof plan PDF and the first floor plan PDF, and pick the
    page. Each page gets a Step 0 report (vector or raster, text, room names, dimensions) and
    is assigned **Method A** (vector) or **Method B** (raster) with the reasons shown.
-3. **Calibrate** (6 steps):
-   1. Roof plan scale: place A and B on a known dimension (e.g. `10113` wall-plate outer faces), type the real mm.
-   2. Roof reference point (e.g. wall-plate outer corner).
-   3. Floor plan scale (e.g. `10436` overall).
-   4. Floor reference point (e.g. the masonry corner at the same corner of the house).
-   5. **Offset** between the two references in mm. The app shows the numbers (e.g.
-      (10436 − 10113) / 2 = 161.5) but never assumes them. You confirm.
-   6. Check: rotation between the two reference lines (warns over 0.1°), stated-scale
-      cross-check, error estimate, and a **required measure check** on the overlay.
-   Saving creates a new version with the drawing code and date. Older versions are kept.
-4. **On site:** open a plot, use **Measure** on a dimension you can tape, then tick
-   **Checked on site** with the date and what you measured. Until you do, every plot of
-   that type shows "NOT yet checked on site".
+3. **Set up the overlay** (once per house type). The overlay is a rough guide to where
+   rooms sit under the roof when marking out. It does not replace the truss layout.
+   - **Quick setup (default, 2 taps):** the scale comes from the drawings' own stated
+     scale (e.g. 1:50). Tap an outside corner of the building walls on the roof plan,
+     then the same corner on the floor plan, check the red roof walls sit on the blue
+     floor walls, and save. On the Ellerton drawings this lines up to within a few mm.
+   - **Full calibration (optional):** measure a known dimension on each drawing, set the
+     reference offset, and get a rotation check and error estimate. Use it if a drawing
+     has no stated scale or isn't printed to scale.
+   The measure check and the "Checked on site" tick are optional.
 
 Precision tapping: in point mode, drag one finger. The orange crosshair sits **above** your
 finger, a 4× loupe shows the spot, and on vector drawings it snaps to line ends (green
