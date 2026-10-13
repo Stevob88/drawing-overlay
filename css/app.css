@@ -73,14 +73,14 @@ p { margin: 0; overflow-wrap: anywhere; }
 .steps li.current .n { background: var(--blue); border-color: var(--blue); color: var(--blue-ink); }
 
 /* ---- layout ---- */
-.layout { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); grid-template-areas: "files" "hint" "canvas" "tools" "options" "notice"; }
+.layout { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); grid-template-areas: "files" "hint" "canvas" "tools" "actions" "options" "notice"; }
 .layout > * { min-width: 0; }
 .a-files { grid-area: files; } .a-hint { grid-area: hint; } .a-canvas { grid-area: canvas; }
-.a-tools { grid-area: tools; } .a-options { grid-area: options; } .a-notice { grid-area: notice; }
+.a-tools { grid-area: tools; } .a-actions { grid-area: actions; } .a-options { grid-area: options; } .a-notice { grid-area: notice; }
 .layout.empty { max-width: 640px; margin: 0 auto; }
 @media (min-width: 960px) {
-  .layout:not(.empty) { grid-template-columns: minmax(0, 1fr) 360px; grid-template-areas: "canvas files" "canvas tools" "canvas options" "canvas notice"; grid-template-rows: auto auto auto 1fr; align-items: start; column-gap: 18px; }
-  .layout.hinted:not(.empty) { grid-template-areas: "hint files" "canvas tools" "canvas options" "canvas notice"; }
+  .layout:not(.empty) { grid-template-columns: minmax(0, 1fr) 360px; grid-template-areas: "canvas files" "canvas tools" "canvas actions" "canvas options" "canvas notice"; grid-template-rows: auto auto auto auto 1fr; align-items: start; column-gap: 18px; }
+  .layout.hinted:not(.empty) { grid-template-areas: "hint files" "canvas tools" "canvas actions" "canvas options" "canvas notice"; }
   .layout:not(.empty) .a-canvas { align-self: stretch; }
 }
 
@@ -166,6 +166,17 @@ body.noscroll { overflow: hidden; }
 .tool .ico { width: 24px; height: 24px; }
 .tool.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
 .tool.primary { box-shadow: 0 2px 10px color-mix(in srgb, var(--blue) 40%, transparent); }
+.tools.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.tools.one { grid-template-columns: minmax(0, 1fr); }
+.tools.actions .tool { flex-direction: row; min-height: var(--tap); font-size: 15px; }
+.tool.danger { color: var(--red); }
+#printout { display: none; }
+@media print {
+  body > *:not(#printout) { display: none !important; }
+  html, body { background: #fff !important; }
+  #printout { display: block; }
+  #printout img { display: block; width: 100%; height: auto; max-height: 100vh; object-fit: contain; }
+}
 .tools.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .tools.two .tool { flex-direction: row; min-height: var(--tap); font-size: 15px; }
 

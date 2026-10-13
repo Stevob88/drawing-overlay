@@ -175,7 +175,7 @@ function draw(ctx, view, info) {
     ctx.restore();
   }
   if (dr.floor && (showWallsOnly() || showCleanFloor())) drawRooms(ctx, view, dpr); // room names on top, never mirrored
-  if (saved.align) marks(ctx, view, dpr, { x: fx(saved.align.floorRef.x + saved.nudge.x), y: saved.align.floorRef.y + saved.nudge.y });
+  if (saved.align && !info.print) marks(ctx, view, dpr, { x: fx(saved.align.floorRef.x + saved.nudge.x), y: saved.align.floorRef.y + saved.nudge.y });
 }
 
 const rgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
@@ -401,6 +401,9 @@ const ICONS = {
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
   expand: '<path d="M14 4h6v6M10 20H4v-6M20 4l-6.5 6.5M4 20l6.5-6.5"/>',
   shrink: '<path d="M14 4v6h6M10 20v-6H4M14 10l6.5-6.5M10 14l-6.5 6.5"/>',
+  download: '<path d="M12 4v11M7 10.5l5 5 5-5"/><path d="M5 19.5h14"/>',
+  print: '<path d="M7 9V4h10v5"/><rect x="3.5" y="9" width="17" height="8" rx="1.5"/><path d="M7 14h10v6H7z"/>',
+  trash: '<path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13M10 11v5.5M14 11v5.5"/>',
   undo: '<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/>',
 };
 function ico(name) {
@@ -486,6 +489,111 @@ function setFullView(on) {
 document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && fullView) setFullView(false); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && fullView) setFullView(false); });
 
+// ---------------------------------------------------------------- download / print / clear
+/**
+ * The overlay as a picture for printing: the whole house (as Fit shows it) at A4 landscape or
+ * portrait, 300 dpi, with the drawing names and the setting-out notice along the bottom.
+ */
+function overlayImage() {
+  const b = homeBox();
+  const landscape = b.x1 - b.x0 >= b.y1 - b.y0;
+  const dpr = 2.5; // 1404 x 992 "screen" pixels -> 3510 x 2480 image
+  const W = landscape ? 1404 : 992;
+  const H = landscape ? 992 : 1404;
+  const FOOT = 64;
+  const c = document.createElement('canvas');
+  c.width = Math.round(W * dpr);
+  c.height = Math.round(H * dpr);
+  const ctx = c.getContext('2d');
+  const dh = H - FOOT;
+  const s = Math.min((W - 40) / (b.x1 - b.x0), (dh - 40) / (b.y1 - b.y0));
+  const view = { s, tx: W / 2 - ((b.x0 + b.x1) / 2) * s, ty: dh / 2 - ((b.y0 + b.y1) / 2) * s };
+  const keep = mode;
+  mode = 'view';
+  try { draw(ctx, view, { w: W, h: dh, dpr, print: true }); } finally { mode = keep; }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, dh, W, FOOT);
+  ctx.fillStyle = '#d0d5dd';
+  ctx.fillRect(16, dh, W - 32, 1);
+  ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#111827';
+  ctx.font = 'bold 13px system-ui, -apple-system, sans-serif';
+  const names = `Roof: ${saved.roof?.name || '-'}    Floor: ${saved.floor?.name || '-'}${saved.flip ? '    FLIPPED (opposite hand)' : ''}`;
+  ctx.fillText(names, 16, dh + 24, W - 160);
+  ctx.textAlign = 'right';
+  ctx.fillText(new Date().toLocaleDateString('en-GB'), W - 16, dh + 24);
+  ctx.textAlign = 'left';
+  ctx.font = '12px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = '#7a4b00';
+  ctx.fillText(NOTICE, 16, dh + 46, W - 32);
+  return { canvas: c, landscape };
+}
+
+const toBlob = (c) => new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('Could not make the picture.'))), 'image/png'));
+const fileName = () => `RoofLine ${(saved.floor?.name || 'overlay').replace(/\.pdf$/i, '')}.png`;
+const touchDevice = () => matchMedia('(pointer: coarse)').matches || /iPhone|iPad|iPod|Android/.test(navigator.userAgent);
+
+async function downloadOverlay() {
+  try {
+    const blob = await toBlob(overlayImage().canvas);
+    const file = new File([blob], fileName(), { type: 'image/png' });
+    // iPhone: the share sheet offers Save Image, Save to Files, Print, AirDrop and email
+    if (touchDevice() && navigator.canShare?.({ files: [file] })) {
+      try { await navigator.share({ files: [file] }); } catch (e) { if (e.name !== 'AbortError') throw e; }
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const a = h('a', { href: url, download: file.name, style: 'display:none' });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    toast('Saved to your downloads.');
+  } catch (e) {
+    toast('Could not save the picture: ' + e.message, 5000);
+  }
+}
+
+async function printOverlay() {
+  try {
+    const { canvas, landscape } = overlayImage();
+    const url = URL.createObjectURL(await toBlob(canvas));
+    document.getElementById('printout')?.remove();
+    const img = h('img', { src: url, alt: 'Roof plan over floor plan' });
+    const box = h('div', { id: 'printout' }, h('style', null, `@page { size: A4 ${landscape ? 'landscape' : 'portrait'}; margin: 8mm; }`), img);
+    document.body.append(box);
+    await img.decode().catch(() => {});
+    window.print();
+    // keep the picture until printing has finished (iPhone prints after print() returns)
+    window.addEventListener('afterprint', () => { box.remove(); URL.revokeObjectURL(url); }, { once: true });
+  } catch (e) {
+    toast('Could not print: ' + e.message, 5000);
+  }
+}
+
+/** Remove both drawings from this device and start again with an empty screen. */
+async function clearAll() {
+  if (!confirm('Clear both drawings and start again? They will be removed from this device.')) return;
+  setFullView(false);
+  for (const slot of ['roof', 'floor']) {
+    const d = dr[slot];
+    if (!d) continue;
+    // free the big page pictures straight away (iPhone keeps their memory otherwise)
+    for (const c of [d.canvas, d.tinted]) if (c) { c.width = 0; c.height = 0; }
+    d.doc?.destroy?.();
+    dr[slot] = null;
+  }
+  saved = { ...saved, roof: null, floor: null, align: null, nudge: { x: 0, y: 0 }, flip: false, scaleOverride: { roof: null, floor: null } };
+  mode = 'view';
+  scaleBoxOpen = false;
+  try { await db.clear('files'); } catch { /* nothing stored */ }
+  await save();
+  render();
+  toast('Cleared. Choose new drawings to start again.');
+}
+
 const toggle = (id, text, checked, onchange) => h('label', { class: 'switch' }, text, h('input', { id, type: 'checkbox', checked, onchange }));
 
 function render() {
@@ -506,6 +614,12 @@ function render() {
       tool('move', mode === 'move' ? 'Done' : 'Move roof', () => { mode = mode === 'move' ? 'view' : 'move'; if (mode === 'view') save(); render(); }, { class: mode === 'move' ? 'on' : '' }),
       tool('fit', 'Fit', () => viewer.fit(homeBox(), 8)),
       tool('flip', saved.flip ? 'Flipped ✓' : 'Flip (opp. hand)', () => { saved.flip = !saved.flip; save(); render(); }, { class: saved.flip ? 'on' : '', pressed: !!saved.flip }))) : null;
+
+  const canExport = both && saved.align && !picking && mode !== 'move';
+  const actions = hasDrawing && !picking ? h('div', { class: `tools ${canExport ? 'three' : 'one'} actions a-actions` },
+    canExport ? tool('download', touchDevice() ? 'Save' : 'Download', downloadOverlay) : null,
+    canExport ? tool('print', 'Print', printOverlay) : null,
+    tool('trash', 'Clear', clearAll, { class: 'danger' })) : null;
 
   const pct = Math.round(saved.opacity * 100);
   const options = both && !picking ? h('div', { class: 'panel a-options' },
@@ -533,7 +647,7 @@ function render() {
         h('button', { 'aria-label': 'Zoom in', onclick: () => viewer.zoomBy(1.6) }, '+'),
         h('button', { 'aria-label': 'Zoom out', onclick: () => viewer.zoomBy(1 / 1.6) }, '−'))),
       fullView && tools ? h('div', { class: 'fullbar' }, tools) : null) : null,
-    fullView ? null : tools, options, notice);
+    fullView ? null : tools, actions, options, notice);
 
   put($app, header(), progress(picking), layout, h('p', { class: 'foot' }, 'Drawings stay on this device. Nothing is uploaded.'));
 
@@ -558,7 +672,7 @@ function render() {
 
 // ---------------------------------------------------------------- start
 async function boot() {
-  window.__roofline = { dr, saved: () => saved, viewer: () => viewer, roofRatio: () => roofRatio(), roofToFloor: (x, y) => roofToFloor(x, y), homeBox: () => homeBox() }; // used by automated tests
+  window.__roofline = { dr, saved: () => saved, viewer: () => viewer, roofRatio: () => roofRatio(), roofToFloor: (x, y) => roofToFloor(x, y), homeBox: () => homeBox(), render: () => render() }; // used by automated tests
   try { saved = { ...saved, ...(await db.kvGet('overlay', {})) }; } catch { /* first run */ }
   for (const slot of ['roof', 'floor']) {
     if (!saved[slot]) continue;
