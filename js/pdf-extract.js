@@ -65,6 +65,7 @@ export function walkOperators(OPS, ol, viewportTransform) {
   // rectangular clips; for other shapes it keeps a little more than the PDF shows.
   let gs = { ctm: viewportTransform.slice(), lw: 1, stroke: '#000000', fill: '#000000', dash: '', clip: null };
   let pendingClip = false;
+  let inMarkup = 0;
   // current point persists across constructPath ops until the path is painted/ended;
   // null = no current point (a lineTo without one draws nothing, never a line from 0,0)
   let cur = null;
@@ -90,14 +91,28 @@ export function walkOperators(OPS, ol, viewportTransform) {
       case P.paintFormXObjectBegin: {
         stack.push({ ...gs, ctm: gs.ctm.slice() });
         if (args?.[0]) gs.ctm = mul(gs.ctm, args[0]);
-        const bb = args?.[1]; // a form XObject is clipped to its BBox
-        if (bb && bb.length === 4) {
+        const bb = args?.[1]; // a form XObject is clipped to its BBox (not inside markups:
+        // their appearance boxes are positioned by the annotation, and they are deliberate)
+        if (bb && bb.length === 4 && !inMarkup) {
           const pts = [[bb[0], bb[1]], [bb[2], bb[1]], [bb[2], bb[3]], [bb[0], bb[3]]].map(([x, y]) => apply(gs.ctm, x, y));
           gs.clip = intersectBox(gs.clip, segBox(pts.flat()));
         }
         break;
       }
       case P.paintFormXObjectEnd: if (stack.length) gs = stack.pop(); break;
+      case P.beginAnnotation: { // markup comments (vent boxes etc.): own state + placement
+        stack.push({ ...gs, ctm: gs.ctm.slice() });
+        inMarkup++;
+        const [, , tr, mx] = args || [];
+        if (tr?.length === 6) gs.ctm = mul(gs.ctm, tr);
+        if (mx?.length === 6) gs.ctm = mul(gs.ctm, mx);
+        gs.clip = null;
+        break;
+      }
+      case P.endAnnotation:
+        inMarkup = Math.max(0, inMarkup - 1);
+        if (stack.length) gs = stack.pop();
+        break;
       case P.setLineWidth: gs.lw = args[0]; break;
       case P.setDash: gs.dash = (args[0] || []).length ? Array.from(args[0]).map(r2).join(',') : ''; break;
       case P.setStrokeRGBColor: gs.stroke = hex(args); break;
@@ -193,7 +208,7 @@ export function walkOperators(OPS, ol, viewportTransform) {
           if (segs && segs.length) {
             paths.push({
               segs, stroke: s, fill: f,
-              lw: r2(gs.lw * scaleOf(gs.ctm)), color: gs.stroke, fillColor: gs.fill, dash: gs.dash,
+              lw: r2(gs.lw * scaleOf(gs.ctm)), color: gs.stroke, fillColor: gs.fill, dash: gs.dash, markup: inMarkup > 0,
             });
           }
           pending = null;
@@ -223,7 +238,101 @@ export async function pageGeometry(pdfjs, page) {
   return {
     width: viewport.width, height: viewport.height, segs, statedScale: scale,
     wallSegs: wallLayer(paths, scale || 50), rooms: roomLabels(tc.items, viewport.transform),
+    clean: {
+      paths: withoutDimensions(paths).map((p) => ({ segs: Float64Array.from(p.segs), stroke: p.stroke, fill: p.fill, color: p.color, fillColor: p.fillColor, lw: p.lw, dash: p.dash, markup: p.markup })),
+      notes: [...noteLabels(tc.items, viewport.transform), ...(await markupLabels(page, viewport))],
+    },
   };
+}
+
+/**
+ * Drop dimensions: the short thick diagonal ticks, and straight lines that have a tick near
+ * one end (dimension lines and extension lines overshoot their ticks).
+ */
+export function withoutDimensions(paths) {
+  const ticks = [];
+  const isTick = (p, x1, y1, x2, y2) => {
+    const dx = x2 - x1, dy = y2 - y1, L = Math.hypot(dx, dy);
+    return p.stroke && !p.markup && p.lw >= 0.7 && L >= 1.5 && L <= 4.5 && Math.abs(Math.abs(dx) - Math.abs(dy)) < 0.2 * L;
+  };
+  for (const p of paths) {
+    const a = p.segs;
+    // a tick may be drawn whole or as two half-strokes from the crossing: test its middle and both ends
+    for (let i = 0; i < a.length; i += 4) {
+      if (isTick(p, a[i], a[i + 1], a[i + 2], a[i + 3])) ticks.push([a[i], a[i + 1]], [a[i + 2], a[i + 3]], [(a[i] + a[i + 2]) / 2, (a[i + 1] + a[i + 3]) / 2]);
+    }
+  }
+  if (!ticks.length) return paths;
+  // grid lookup of tick centres
+  const cell = 4;
+  const grid = new Map();
+  for (const [x, y] of ticks) { const k = `${Math.floor(x / cell)},${Math.floor(y / cell)}`; (grid.get(k) || grid.set(k, []).get(k)).push([x, y]); }
+  const throughTick = (x1, y1, x2, y2) => {
+    const horiz = Math.abs(y1 - y2) < 0.05;
+    const vert = Math.abs(x1 - x2) < 0.05;
+    if (!horiz && !vert) return false;
+    const [a0, a1] = horiz ? [Math.min(x1, x2), Math.max(x1, x2)] : [Math.min(y1, y2), Math.max(y1, y2)];
+    for (let t = Math.floor(a0 / cell) - 1; t <= Math.floor(a1 / cell) + 1; t++) {
+      for (const d of [-1, 0, 1]) {
+        const k = horiz ? `${t},${Math.floor(y1 / cell) + d}` : `${Math.floor(x1 / cell) + d},${t}`;
+        for (const [tx, ty] of grid.get(k) || []) {
+          // the tick must be on the line AND near one of its ends (dimension/extension lines
+          // overshoot their ticks by a few points); a wall a dimension merely touches is kept
+          const along = horiz ? tx : ty;
+          const onLine = horiz ? Math.abs(ty - y1) < 0.6 : Math.abs(tx - x1) < 0.6;
+          if (onLine && along >= a0 - 0.6 && along <= a1 + 0.6 && Math.min(along - a0, a1 - along) <= 6) return true;
+        }
+      }
+    }
+    return false;
+  };
+  const out = [];
+  for (const p of paths) {
+    if (p.markup || !p.stroke) { out.push(p); continue; }
+    const a = p.segs;
+    const keep = [];
+    for (let i = 0; i < a.length; i += 4) {
+      const [x1, y1, x2, y2] = [a[i], a[i + 1], a[i + 2], a[i + 3]];
+      if (isTick(p, x1, y1, x2, y2) || (p.lw < 0.7 && throughTick(x1, y1, x2, y2))) continue;
+      keep.push(x1, y1, x2, y2);
+    }
+    if (keep.length) out.push({ ...p, segs: keep });
+  }
+  return out;
+}
+
+// Roof-plan words worth keeping on the overlay (vents, pipes, hatch, ridge).
+const ROOF_NOTE = /\b(tile\s*vents?|vents?|SVP|RWP|Rwp|EF|ridge|hatch|soaker|flue)\b/i;
+
+/** Short roof notes such as "SVP rise to" / "tile vent", "Rwp" (no measurements). */
+export function noteLabels(items, vt) {
+  const out = [];
+  for (const it of items) {
+    const str = (it.str || '').trim();
+    if (!str || str.length > 45 || !ROOF_NOTE.test(str) || /^[\d\s.,x×-]+$/.test(str)) continue;
+    const m = mul(vt, it.transform);
+    if (Math.abs(m[1]) > 0.01 * Math.abs(m[0])) continue;
+    const size = Math.hypot(m[2], m[3]);
+    out.push({ lines: [str], x: m[4] + (it.width * Math.hypot(vt[0], vt[1])) / 2, y: m[5] - size * 0.35, size, markup: false });
+  }
+  return out;
+}
+
+/** Text of markup comments (e.g. "20K vent 16/17/..."), placed at the comment box. */
+export async function markupLabels(page, viewport) {
+  let anns = [];
+  try { anns = await page.getAnnotations(); } catch { return []; }
+  const out = [];
+  for (const a of anns) {
+    if (a.subtype !== 'FreeText') continue;
+    const raw = (a.contentsObj?.str ?? a.contents ?? '').trim();
+    if (!raw) continue;
+    const lines = (Array.isArray(a.textContent) && a.textContent.length ? a.textContent : raw.split(/\r\n|\r|\n/)).map((t) => t.trim()).filter(Boolean);
+    const [x0, y0, x1, y1] = viewport.convertToViewportRectangle(a.rect);
+    const size = Math.max(5, Math.min(14, (Math.abs(y1 - y0) / Math.max(1, lines.length)) * 0.75));
+    out.push({ lines, x: (x0 + x1) / 2, y: (y0 + y1) / 2, size, markup: true });
+  }
+  return out;
 }
 
 const lum = (hex) => (parseInt(hex.slice(1, 3), 16) + parseInt(hex.slice(3, 5), 16) + parseInt(hex.slice(5, 7), 16)) / 3;

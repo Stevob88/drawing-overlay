@@ -20,11 +20,17 @@ drawn (vent boxes, tile vents, notes). Optional:
 - **Roof see-through** slider.
 - **Colour the drawings**: roof red, floor blue. Untick to see the original colours.
 - **Flip (opp. hand)**: mirrors roof and floor together for opposite-hand plots, about the
-  corner you lined up on. Room names stay readable; writing on the roof plan reads backwards.
+  corner you lined up on. Room names and roof notes stay readable (writing reads backwards only if you untick the roof clean-up below).
 - **Floor plan: walls and room names only** (on by default): shows just the walls (the grey
   wall layer plus stud partitions drawn as paired lines) and room names such as BED 1,
   EN-SUITE, BATH, LANDING. Untick to see the full floor drawing. Floor plans without a
   separate wall layer always show in full.
+- **Roof plan: hide measurements and sheet notes** (on by default): the roof is drawn from
+  its own lines without dimension lines, measurements, title block or keys. Kept: roof
+  lines, wall hatching, tile vent symbols, short roof notes (SVP, EF to tile vent, Rwp,
+  ridge) and markup comments such as the pink 20K vent boxes and yellow PV areas with
+  their notes. Dimensions are recognised by their end ticks. Untick to see the roof sheet
+  exactly as printed.
 - **Move roof**: drag to nudge it. **Undo roof moves** puts it back.
 - **Line up again**, **Fit** (zooms to the house).
 

@@ -97,3 +97,24 @@ test('synthetic floor plan has no grey wall layer, so the full drawing is used',
   assert.equal(g.wallSegs, null);
   assert.ok(g.rooms.some((r) => r.str === 'EN-SUITE'));
 });
+
+test('REAL roof plan, cleaned: no dimensions, all vent and PV markups kept', { skip: !have && 'no real drawings' }, async () => {
+  const roof = await geometry(real('ellerton_roof.pdf'));
+  const c = roof.clean;
+  // no dimension ticks left (short thick diagonals)
+  for (const p of c.paths) {
+    for (let i = 0; i < p.segs.length; i += 4) {
+      const dx = p.segs[i + 2] - p.segs[i], dy = p.segs[i + 3] - p.segs[i + 1], L = Math.hypot(dx, dy);
+      assert.ok(!(p.stroke && !p.markup && p.lw >= 0.7 && L >= 1.5 && L <= 4.5 && Math.abs(Math.abs(dx) - Math.abs(dy)) < 0.2 * L), 'tick left');
+    }
+  }
+  // the 5461 dimension line (y = 712.8, x 380-695) is gone
+  assert.ok(!c.paths.some((p) => { for (let i = 0; i < p.segs.length; i += 4) if (Math.abs(p.segs[i + 1] - 712.8) < 0.05 && Math.abs(p.segs[i + 3] - 712.8) < 0.05 && Math.abs(p.segs[i + 2] - p.segs[i]) > 300) return true; return false; }));
+  const pink = c.paths.filter((p) => p.markup && p.fillColor === '#fb88ff');
+  const yellow = c.paths.filter((p) => p.markup && p.fillColor === '#fcf485');
+  assert.equal(pink.length, 4, '20K vent boxes');
+  assert.equal(yellow.length, 4, 'PV areas');
+  // notes keep the vents, never measurements
+  assert.ok(c.notes.some((n) => /20K vent/.test(n.lines.join(' '))));
+  assert.ok(!c.notes.some((n) => /^\d+$/.test(n.lines.join('').trim())), 'no bare numbers');
+});

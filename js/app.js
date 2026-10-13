@@ -12,7 +12,7 @@ const FLOOR_TINT = '#0047c2';
 const NOTICE = 'Setting-out aid only. Vent positions on the roof plan are indicative. Check against the truss layout / designer before fixing.';
 
 // saved between visits (IndexedDB, this device only)
-let saved = { roof: null, floor: null, align: null, nudge: { x: 0, y: 0 }, opacity: 0.6, colour: true, flip: false, wallsOnly: true };
+let saved = { roof: null, floor: null, align: null, nudge: { x: 0, y: 0 }, opacity: 0.6, colour: true, flip: false, wallsOnly: true, cleanRoof: true };
 // loaded drawings: { doc, pages, page, canvas, scale, width, height, segs, statedScale, tinted }
 const dr = { roof: null, floor: null };
 let mode = 'view'; // view | pick-roof | pick-floor | move
@@ -91,6 +91,26 @@ const axis = () => (saved.align?.floorRef ? saved.align.floorRef.x : (dr.floor?.
 const fx = (x) => (flipping() ? 2 * axis() - x : x);
 const flipBox = (b) => (flipping() ? { x0: fx(b.x1), y0: b.y0, x1: fx(b.x0), y1: b.y1 } : b);
 const showWallsOnly = () => saved.wallsOnly && !!dr.floor?.wallSegs;
+const showCleanRoof = () => saved.cleanRoof && !!dr.roof?.clean;
+
+/** Floor point -> roof point (inverse of roofToFloor). */
+function floorToRoof(x, y) {
+  const k = roofRatio();
+  const al = saved.align;
+  const n = saved.nudge;
+  if (!al?.roofRef || !al?.floorRef) return { x: (x - n.x) / k, y: (y - n.y) / k };
+  return { x: (x - n.x - al.floorRef.x) / k + al.roofRef.x, y: (y - n.y - al.floorRef.y) / k + al.roofRef.y };
+}
+/** Part of the roof sheet to keep: the house (found on the floor plan) plus a margin. */
+function roofRegion() {
+  const r = dr.roof;
+  if (!saved.align?.floorRef) return { x0: 0, y0: 0, x1: r.width, y1: r.height };
+  const b = homeBoxUnflipped();
+  const m = 0.12 * Math.max(b.x1 - b.x0, b.y1 - b.y0);
+  const a = floorToRoof(b.x0 - m, b.y0 - m);
+  const c = floorToRoof(b.x1 + m, b.y1 + m);
+  return { x0: Math.min(a.x, c.x), y0: Math.min(a.y, c.y), x1: Math.max(a.x, c.x), y1: Math.max(a.y, c.y) };
+}
 
 // ---------------------------------------------------------------- drawing
 function drawPage(ctx, view, d, img, dpr, m0) {
@@ -114,7 +134,8 @@ function draw(ctx, view, info) {
     if (showWallsOnly()) drawWalls(ctx, view, dpr);
     else drawPage(ctx, view, dr.floor, saved.colour ? dr.floor.tinted : dr.floor.canvas, dpr, [1, 0, 0, 1, 0, 0]);
   }
-  if (dr.roof) {
+  if (dr.roof && showCleanRoof()) drawRoofClean(ctx, view, dpr);
+  else if (dr.roof) {
     const o = roofToFloor(0, 0);
     const k = roofRatio();
     ctx.save();
@@ -125,6 +146,77 @@ function draw(ctx, view, info) {
   }
   if (dr.floor && showWallsOnly()) drawRooms(ctx, view, dpr); // room names on top, never mirrored
   if (saved.align) marks(ctx, view, dpr, { x: fx(saved.align.floorRef.x + saved.nudge.x), y: saved.align.floorRef.y + saved.nudge.y });
+}
+
+const rgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+const isColour = (hex) => { const v = rgb(hex); return Math.max(...v) - Math.min(...v) >= 40; };
+const lightness = (hex) => rgb(hex).reduce((a, b) => a + b, 0) / 765;
+
+/**
+ * Roof plan drawn from its own linework, without dimensions, measurements, title block or
+ * keys. Markups (vent / PV boxes and their notes) are always kept.
+ */
+function drawRoofClean(ctx, view, dpr) {
+  const { s, tx, ty } = view;
+  const reg = roofRegion();
+  const inReg = (x, y) => x >= reg.x0 && x <= reg.x1 && y >= reg.y0 && y <= reg.y1;
+  const P = (x, y) => { const f = roofToFloor(x, y); return [fx(f.x) * s + tx, f.y * s + ty]; };
+  ctx.save();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.globalAlpha = saved.opacity;
+  ctx.lineCap = 'round';
+  for (const p of dr.roof.clean.paths) {
+    const a = p.segs;
+    if (!p.markup) {
+      // skip linework outside the house area (sheet notes, keys, title block)
+      let cx = 0, cy = 0;
+      for (let i = 0; i < a.length; i += 2) { cx += a[i]; cy += a[i + 1]; }
+      if (!inReg(cx / (a.length / 2), cy / (a.length / 2))) continue;
+    }
+    ctx.beginPath();
+    let lx = NaN, ly = NaN;
+    for (let i = 0; i < a.length; i += 4) {
+      if (a[i] !== lx || a[i + 1] !== ly) ctx.moveTo(...P(a[i], a[i + 1]));
+      ctx.lineTo(...P(a[i + 2], a[i + 3]));
+      lx = a[i + 2]; ly = a[i + 3];
+    }
+    // coloured items (pink vent boxes, yellow PV areas) keep their colour; black/grey linework
+    // takes the roof colour. White fills are text backgrounds and are skipped.
+    if (p.fill && p.fillColor !== '#ffffff') {
+      const own = p.markup || !saved.colour || isColour(p.fillColor);
+      ctx.save();
+      ctx.globalAlpha = saved.opacity * (isColour(p.fillColor) ? 0.5 : lightness(p.fillColor) > 0.5 ? 0.25 : 1);
+      ctx.fillStyle = own ? p.fillColor : ROOF_TINT;
+      ctx.fill('evenodd');
+      ctx.restore();
+    }
+    if (p.stroke && p.color !== '#ffffff') {
+      ctx.strokeStyle = p.markup || !saved.colour || isColour(p.color) ? p.color : ROOF_TINT;
+      ctx.lineWidth = Math.max(p.markup ? 1.5 : 0.8, Math.min(3, p.lw * s * roofRatio()));
+      ctx.setLineDash(p.dash ? [5, 3] : []);
+      ctx.stroke();
+    }
+  }
+  ctx.setLineDash([]);
+  // notes: markups always, other roof notes inside the house area; never mirrored
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (const n of dr.roof.clean.notes) {
+    if (!n.markup && !inReg(n.x, n.y)) continue;
+    const [x, y] = P(n.x, n.y);
+    const px = Math.max(9, Math.min(18, n.size * s * roofRatio()));
+    const lh = px * 1.15;
+    ctx.font = `${n.markup ? 'bold ' : ''}${px}px system-ui, -apple-system, sans-serif`;
+    n.lines.forEach((t, i) => {
+      const yy = y + (i - (n.lines.length - 1) / 2) * lh;
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+      ctx.strokeText(t, x, yy);
+      ctx.fillStyle = n.markup ? '#a0005a' : saved.colour ? '#b00000' : '#000000';
+      ctx.fillText(t, x, yy);
+    });
+  }
+  ctx.restore();
 }
 
 /** Floor plan reduced to its wall layer. */
@@ -274,6 +366,7 @@ function render() {
       dr.floor.wallSegs
         ? h('label', { class: 'inline' }, h('input', { id: 'walls', type: 'checkbox', checked: saved.wallsOnly, onchange: (e) => { saved.wallsOnly = e.target.checked; save(); viewer.redraw(); } }), 'Floor plan: walls and room names only')
         : h('p', { class: 'muted small' }, 'This floor plan has no separate wall layer, so the whole floor drawing is shown.'),
+      h('label', { class: 'inline' }, h('input', { id: 'cleanroof', type: 'checkbox', checked: saved.cleanRoof, onchange: (e) => { saved.cleanRoof = e.target.checked; save(); render(); } }), 'Roof plan: hide measurements and sheet notes'),
       h('label', { for: 'opacity' }, 'Roof see-through'),
       h('input', { id: 'opacity', type: 'range', min: 10, max: 100, value: Math.round(saved.opacity * 100), oninput: (e) => { saved.opacity = e.target.value / 100; viewer.redraw(); }, onchange: save }),
       h('label', { class: 'inline' }, h('input', { id: 'colour', type: 'checkbox', checked: saved.colour, onchange: (e) => { saved.colour = e.target.checked; save(); render(); } }), 'Colour the drawings (roof red, floor blue)'),
@@ -284,7 +377,7 @@ function render() {
     h('div', { class: 'files' }, slotCard('roof', 'Roof plan'), slotCard('floor', 'Floor plan')),
     instruction() || '',
     both || dr.roof || dr.floor ? h('div', { class: 'canvaswrap' }, canvas,
-      both && saved.flip && !picking ? h('div', { class: 'modebar' }, h('span', { class: 'mirrorbadge' }, 'FLIPPED - opposite hand. Roof writing reads backwards.')) : null,
+      both && saved.flip && !picking ? h('div', { class: 'modebar' }, h('span', { class: 'mirrorbadge' }, showCleanRoof() ? 'FLIPPED - opposite hand' : 'FLIPPED - opposite hand. Roof writing reads backwards.')) : null,
       h('div', { class: 'canvasbtns' },
         h('button', { 'aria-label': 'Zoom in', onclick: () => viewer.zoomBy(1.6) }, '+'),
         h('button', { 'aria-label': 'Zoom out', onclick: () => viewer.zoomBy(1 / 1.6) }, '−'))) : '',
