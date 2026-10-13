@@ -18,6 +18,7 @@ let saved = { roof: null, floor: null, align: null, nudge: { x: 0, y: 0 }, opaci
 const dr = { roof: null, floor: null };
 let mode = 'view'; // view | pick-roof | pick-floor | move
 let viewer = null;
+let fullView = false; // drawing fills the whole screen
 
 // ---------------------------------------------------------------- helpers
 function h(tag, attrs, ...kids) {
@@ -398,6 +399,8 @@ const ICONS = {
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
+  expand: '<path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/>',
+  shrink: '<path d="M4 14h6v6M20 10h-6V4M10 14l-7 7M14 10l7-7"/>',
   undo: '<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/>',
 };
 function ico(name) {
@@ -467,6 +470,22 @@ function scaleBox() {
 }
 
 const tool = (icon, text, onclick, extra = {}) => h('button', { class: `tool ${extra.class || ''}`, onclick, 'aria-pressed': extra.pressed == null ? null : String(extra.pressed) }, ico(icon), text);
+/**
+ * Full screen: the drawing box covers the page (works everywhere, including iPhone), and where
+ * the browser allows it the browser's own bars are hidden too.
+ */
+function setFullView(on) {
+  if (on === fullView) return;
+  fullView = on;
+  document.body.classList.toggle('noscroll', on);
+  const de = document.documentElement;
+  if (on && de.requestFullscreen && !document.fullscreenElement) de.requestFullscreen().catch(() => {});
+  if (!on && document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  render();
+}
+document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && fullView) setFullView(false); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && fullView) setFullView(false); });
+
 const toggle = (id, text, checked, onchange) => h('label', { class: 'switch' }, text, h('input', { id, type: 'checkbox', checked, onchange }));
 
 function render() {
@@ -503,20 +522,24 @@ function render() {
   const hint = instruction();
   const layout = h('div', { class: `layout ${hasDrawing ? '' : 'empty'} ${hint ? 'hinted' : ''}` },
     h('div', { class: `files a-files ${both ? 'compact' : ''}` }, slotCard('roof', 'Roof plan'), slotCard('floor', 'Floor plan')),
-    hint ? (hint.classList.add('a-hint'), hint) : null,
-    hasDrawing ? h('div', { class: `canvaswrap a-canvas ${picking ? 'aiming' : ''}` }, canvas,
+    hint && !fullView ? (hint.classList.add('a-hint'), hint) : null,
+    hasDrawing ? h('div', { class: `canvaswrap a-canvas ${picking ? 'aiming' : ''} ${fullView ? 'full' : ''}` },
+      fullView && hint ? h('div', { class: 'fullhint' }, hint) : null,
+      h('div', { class: 'stage' }, canvas,
       both && saved.flip && !picking ? h('div', { class: 'modebar' }, h('span', { class: 'mirrorbadge' }, showCleanRoof() ? 'FLIPPED - opposite hand' : 'FLIPPED - opposite hand. Roof writing reads backwards.')) : null,
       chips,
       h('div', { class: 'canvasbtns' },
+        h('button', { 'aria-label': fullView ? 'Exit full screen' : 'Full screen', title: fullView ? 'Exit full screen' : 'Full screen', onclick: () => setFullView(!fullView) }, ico(fullView ? 'shrink' : 'expand')),
         h('button', { 'aria-label': 'Zoom in', onclick: () => viewer.zoomBy(1.6) }, '+'),
-        h('button', { 'aria-label': 'Zoom out', onclick: () => viewer.zoomBy(1 / 1.6) }, '−'))) : null,
-    tools, options, notice);
+        h('button', { 'aria-label': 'Zoom out', onclick: () => viewer.zoomBy(1 / 1.6) }, '−'))),
+      fullView && tools ? h('div', { class: 'fullbar' }, tools) : null) : null,
+    fullView ? null : tools, options, notice);
 
   put($app, header(), progress(picking), layout, h('p', { class: 'foot' }, 'Drawings stay on this device. Nothing is uploaded.'));
 
   viewer?.destroy();
   viewer = null;
-  if (!(both || dr.roof || dr.floor)) return;
+  if (!(both || dr.roof || dr.floor)) { if (fullView) setFullView(false); return; }
   viewer = new Viewer(canvas, {
     draw,
     onPoint,

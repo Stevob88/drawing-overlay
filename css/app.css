@@ -136,12 +136,20 @@ select { border: 1.5px solid var(--line); background: var(--surface); border-rad
 .canvaswrap canvas { display: block; width: 100%; height: 62vh; min-height: 340px; background: #fff; }
 /* Wide screens: the drawing box stretches to the height of the side column, so the canvas
    must fill the box, not stop at a fixed height (that left the bottom of drawings blank). */
-@media (min-width: 960px) {
-  .layout:not(.empty) .canvaswrap { display: flex; flex-direction: column; }
-  .canvaswrap canvas { flex: 1 1 auto; height: calc(100vh - 230px); min-height: 520px; }
-}
+@media (min-width: 960px) { .canvaswrap canvas { height: calc(100vh - 230px); min-height: 520px; } }
+.canvaswrap { display: flex; flex-direction: column; }
+.stage { position: relative; flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+.canvaswrap canvas { flex: 1 1 auto; }
+/* full screen: the drawing box covers the page; the instructions and main buttons come with it */
+.canvaswrap.full { position: fixed; inset: 0; z-index: 25; border: 0; border-radius: 0; box-shadow: none; background: var(--bg);
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+.canvaswrap.full .stage { flex: 1 1 0; }
+.canvaswrap.full canvas { flex: 1 1 0; height: 0; min-height: 0; }
+.fullhint, .fullbar { flex: none; padding: 8px 10px; }
+.fullhint .callout { padding: 8px 12px; }
+body.noscroll { overflow: hidden; }
 .canvasbtns { position: absolute; right: 10px; bottom: 10px; display: flex; flex-direction: column; gap: 8px; }
-.canvasbtns button { width: 46px; min-height: 46px; padding: 0; font-size: 22px; border-radius: 14px; background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: blur(6px); box-shadow: 0 2px 10px rgba(13, 22, 38, .18); }
+.canvasbtns button { display: grid; place-items: center;  width: 46px; min-height: 46px; padding: 0; font-size: 22px; border-radius: 14px; background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: blur(6px); box-shadow: 0 2px 10px rgba(13, 22, 38, .18); }
 .chips { position: absolute; left: 10px; bottom: 10px; display: flex; gap: 6px; flex-wrap: wrap; pointer-events: none; }
 .chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 750; padding: 5px 10px; border-radius: 999px; background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: blur(6px); border: 1px solid var(--line); box-shadow: 0 1px 6px rgba(13, 22, 38, .12); color: var(--ink); }
 .dot { width: 10px; height: 10px; border-radius: 3px; flex: none; }

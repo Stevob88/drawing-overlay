@@ -27,5 +27,20 @@ await page.waitForTimeout(500);
 const sz = await page.evaluate(()=>({wrap:document.querySelector('.canvaswrap').getBoundingClientRect().height, canvas:document.querySelector('.canvaswrap canvas').getBoundingClientRect().height}));
 console.log('box', sz.wrap, 'canvas', sz.canvas);
 if (sz.canvas < sz.wrap - 4) { console.error('DESKTOP E2E FAIL: canvas shorter than its box'); process.exitCode = 1; } else console.log('DESKTOP E2E PASSED');
+
+// full screen: the drawing fills the window, the buttons come with it, Esc returns
+for (const vp of [{ width: 1366, height: 768 }, { width: 390, height: 844 }]) {
+  await page.setViewportSize(vp);
+  await page.getByRole('button', { name: 'Full screen' }).click();
+  await page.waitForTimeout(400);
+  const f = await page.evaluate(() => ({ c: document.querySelector('.canvaswrap canvas').getBoundingClientRect().toJSON(), fit: !!document.querySelector('.fullbar button') }));
+  console.log('full screen', vp.width, 'canvas', Math.round(f.c.width), 'x', Math.round(f.c.height));
+  if (f.c.width < vp.width - 2 || f.c.height < vp.height - 160 || !f.fit) { console.error('DESKTOP E2E FAIL: full screen does not fill the window'); process.exitCode = 1; }
+  if (process.argv[2]) await page.screenshot({ path: process.argv[2].replace('.png', `-full${vp.width}.png`) });
+  if (vp.width > 500) await page.keyboard.press('Escape'); else await page.getByRole('button', { name: 'Exit full screen' }).click();
+  await page.waitForTimeout(300);
+  if (await page.locator('.canvaswrap.full').count()) { console.error('DESKTOP E2E FAIL: full screen did not close'); process.exitCode = 1; }
+}
+await page.setViewportSize({ width: 1366, height: 768 });
 if (process.argv[2]) await page.screenshot({ path: process.argv[2], fullPage: true });
 await b.close(); server.kill();
