@@ -5,6 +5,7 @@ import { openPdf, loadPage, tint } from './pdfdoc.js';
 import { Viewer } from './viewer.js';
 import { snapNear, roofToFloorPoint, houseArea, inArea, scaleRatio } from './geom.js';
 import { STANDARD_SCALES } from './pdf-extract.js';
+import { APP_VERSION } from './version.js';
 
 const $app = document.getElementById('app');
 const $toast = document.getElementById('toast');
@@ -691,6 +692,23 @@ async function clearAll() {
   toast('Cleared. Choose new drawings to start again.');
 }
 
+// ---------------------------------------------------------------- version
+const versionText = () => `Version ${APP_VERSION.number} · ${new Date(APP_VERSION.date + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+
+/** Tap the version: fetch the newest app now (the page reloads itself if there is one). */
+async function checkForUpdate() {
+  try {
+    const reg = await navigator.serviceWorker?.getRegistration();
+    if (!reg) return toast(`${versionText()}.`);
+    toast('Checking for a newer version…', 10000);
+    await reg.update();
+    if (reg.installing || reg.waiting) toast('Updating to the newest version…', 10000);
+    else toast(`You have the latest version (${APP_VERSION.number}).`, 4000);
+  } catch {
+    toast(`No signal, so cannot check. You have version ${APP_VERSION.number}.`, 5000);
+  }
+}
+
 const toggle = (id, text, checked, onchange) => h('label', { class: 'switch' }, text, h('input', { id, type: 'checkbox', checked, onchange }));
 
 function render() {
@@ -752,7 +770,7 @@ function render() {
       fullView && tools ? h('div', { class: 'fullbar' }, tools) : null) : null,
     fullView ? null : tools, actions, options, notice);
 
-  put($app, header(), progress(picking), layout, h('p', { class: 'foot' }, 'Drawings stay on this device. Nothing is uploaded.'));
+  put($app, header(), progress(picking), layout, h('p', { class: 'foot' }, 'Drawings stay on this device. Nothing is uploaded.', h('br'), h('button', { class: 'version', title: 'Check for a newer version', onclick: checkForUpdate }, versionText())));
 
   viewer?.destroy();
   viewer = null;
