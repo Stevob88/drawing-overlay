@@ -289,6 +289,59 @@ def schedule(path):
     c.save()
 
 
+WINGS = [  # (x, y, w, d) in mm: a main wing, a second wing across a 1.2 m gap, and a small store
+    (0, 0, 7000, 5000),
+    (8200, 2000, 5000, 4000),
+    (2000, 6600, 1800, 1500),
+]
+
+
+def bungalow_floor(path):
+    """Spread-out plan: wings separated by gaps, a key block to the side. Wings carry room names."""
+    c = canvas.Canvas(path, pagesize=(PAGE_W, PAGE_H))
+    pl = Plan(c, 120, 640)
+    c.setStrokeColorRGB(0, 0, 0)
+    c.setLineWidth(0.7)
+    names = ["LOUNGE", "BED 1", "STORE"]
+    for (x, y, w, d), name in zip(WINGS, names):
+        pl.rect(x, y, w, d)
+        pl.rect(x + CAV, y + CAV, w - 2 * CAV, d - 2 * CAV)
+        if w >= 5000:  # furniture and a partition, as on a real plan
+            c.setLineWidth(0.25)
+            for i in range(4):
+                for j in range(3):
+                    pl.rect(x + 500 + i * 1100, y + 500 + j * 1000, 700, 600)
+            pl.line(x + w / 2, y + CAV, x + w / 2, y + d - CAV)
+            c.setLineWidth(0.7)
+        c.setFont("Helvetica-Bold", 9)
+        pl.text(x + w / 2, y + d / 2, name)
+    # key block: a grid of small symbols, well away from the plan
+    c.setLineWidth(0.25)
+    for r in range(3):
+        for k in range(3):
+            c.rect(950 + k * 40, 480 - r * 40, 28, 28)
+    c.setFont("Helvetica", 8)
+    c.drawString(950, 520, "ELECTRICAL SYMBOLS KEY")
+    title_block(c, "FIRST FLOOR PLAN", "BUNGALOW", "2026-03-01")
+    c.showPage()
+    c.save()
+
+
+def bungalow_roof(path):
+    c = canvas.Canvas(path, pagesize=(PAGE_W, PAGE_H))
+    pl = Plan(c, 160, 600)
+    c.setStrokeColorRGB(0, 0, 0)
+    c.setLineWidth(0.7)
+    for (x, y, w, d) in WINGS:
+        pl.rect(x - 300, y - 300, w + 600, d + 600)
+        c.setLineWidth(0.5)
+        pl.line(x + d / 2, y + d / 2, x + w - d / 2, y + d / 2)
+        c.setLineWidth(0.7)
+    title_block(c, "ROOF PLAN", "BUNGALOW", "2026-03-01")
+    c.showPage()
+    c.save()
+
+
 if __name__ == "__main__":
     floor_plan(os.path.join(OUT, "ellerton_first_floor.pdf"))
     roof_plan(os.path.join(OUT, "ellerton_roof.pdf"))
@@ -298,4 +351,6 @@ if __name__ == "__main__":
     roof_plan(os.path.join(OUT, "ellerton_roof_1to100.pdf"), 100, "Scale 1:100 @ A3")
     roof_plan(os.path.join(OUT, "ellerton_roof_1to100_unstated.pdf"), 100, "")
     roof_plan(os.path.join(OUT, "ellerton_roof_1to100_wrongpaper.pdf"), 100, "Scale 1:50 @ A1")
+    bungalow_floor(os.path.join(OUT, "bungalow_floor.pdf"))
+    bungalow_roof(os.path.join(OUT, "bungalow_roof.pdf"))
     print("written to", OUT)

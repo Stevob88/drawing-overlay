@@ -67,6 +67,81 @@ export function roofToFloorPoint(x, y, align, k = 1, nudge = { x: 0, y: 0 }) {
   };
 }
 
+/** True for lines belonging to the sheet border / title-block frame: very long, or reaching the outer margin. */
+export function isSheetBorder(x1, y1, x2, y2, width, height) {
+  const short = Math.min(width, height);
+  const e = 0.04 * short;
+  const near = (x, y) => x < e || y < e || x > width - e || y > height - e;
+  return Math.hypot(x2 - x1, y2 - y1) > 0.85 * short || near(x1, y1) || near(x2, y2);
+}
+
+/**
+ * The plan areas of a sheet: blocks of linework (gaps of up to ~30 pt are bridged) that are
+ * part of the drawing as opposed to keys, schedules and notes. A block is kept when it is at
+ * least 30% the size of the largest block, or when it contains a room name (so a small wing
+ * is never lost). Returns { boxes, union } in page points, boxes already padded; or null.
+ */
+export function houseArea(segs, width, height, rooms = [], { cell = 10, gap = 3, pad: padOpt } = {}) {
+  const nx = Math.ceil(width / cell);
+  const ny = Math.ceil(height / cell);
+  const ink = new Float32Array(nx * ny);
+  for (let i = 0; i < segs.length; i += 4) {
+    if (isSheetBorder(segs[i], segs[i + 1], segs[i + 2], segs[i + 3], width, height)) continue;
+    const len = Math.hypot(segs[i + 2] - segs[i], segs[i + 3] - segs[i + 1]);
+    const steps = Math.max(1, Math.ceil(len / (cell / 2)));
+    for (let k = 0; k <= steps; k++) {
+      const t = k / steps;
+      const cx = Math.floor((segs[i] + (segs[i + 2] - segs[i]) * t) / cell);
+      const cy = Math.floor((segs[i + 1] + (segs[i + 3] - segs[i + 1]) * t) / cell);
+      if (cx >= 0 && cy >= 0 && cx < nx && cy < ny) ink[cy * nx + cx] += len / (steps + 1);
+    }
+  }
+  const label = new Int32Array(nx * ny).fill(-1);
+  const blocks = [];
+  for (let start = 0; start < nx * ny; start++) {
+    if (ink[start] < 5 || label[start] >= 0) continue;
+    const id = blocks.length;
+    const b = { ink: 0, x0: nx, y0: ny, x1: -1, y1: -1 };
+    blocks.push(b);
+    const stack = [start];
+    label[start] = id;
+    while (stack.length) {
+      const q = stack.pop();
+      const qx = q % nx;
+      const qy = (q - qx) / nx;
+      b.ink += ink[q];
+      if (qx < b.x0) b.x0 = qx; if (qx > b.x1) b.x1 = qx; if (qy < b.y0) b.y0 = qy; if (qy > b.y1) b.y1 = qy;
+      for (let dy = -gap; dy <= gap; dy++) {
+        for (let dx = -gap; dx <= gap; dx++) {
+          const ax = qx + dx;
+          const ay = qy + dy;
+          if (ax < 0 || ay < 0 || ax >= nx || ay >= ny) continue;
+          const a = ay * nx + ax;
+          if (label[a] >= 0 || ink[a] < 5) continue;
+          label[a] = id;
+          stack.push(a);
+        }
+      }
+    }
+  }
+  if (!blocks.length) return null;
+  const biggest = Math.max(...blocks.map((b) => b.ink));
+  const px = (b) => ({ x0: b.x0 * cell, y0: b.y0 * cell, x1: (b.x1 + 1) * cell, y1: (b.y1 + 1) * cell });
+  const kept = blocks.filter((b) => {
+    if (b.ink >= 0.3 * biggest) return true;
+    const r = px(b);
+    return rooms.some((m) => m.x >= r.x0 && m.x <= r.x1 && m.y >= r.y0 && m.y <= r.y1);
+  }).map(px);
+  const boxes = kept.map((r) => {
+    const pad = padOpt ?? Math.max(20, 0.12 * Math.max(r.x1 - r.x0, r.y1 - r.y0));
+    return { x0: r.x0 - pad, y0: r.y0 - pad, x1: r.x1 + pad, y1: r.y1 + pad };
+  });
+  const union = boxes.reduce((u, r) => ({ x0: Math.min(u.x0, r.x0), y0: Math.min(u.y0, r.y0), x1: Math.max(u.x1, r.x1), y1: Math.max(u.y1, r.y1) }), { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity });
+  return { boxes, union };
+}
+
+export const inArea = (area, x, y) => !area || area.boxes.some((r) => x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1);
+
 /** Factor that brings the roof drawing to the floor drawing's scale (1 when either is unknown). */
 export const scaleRatio = (roofN, floorN) => (roofN && floorN ? roofN / floorN : 1);
 

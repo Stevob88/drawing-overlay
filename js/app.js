@@ -3,7 +3,7 @@
 import * as db from './db.js';
 import { openPdf, loadPage, tint } from './pdfdoc.js';
 import { Viewer } from './viewer.js';
-import { snapNear, roofToFloorPoint, regionAround, scaleRatio } from './geom.js';
+import { snapNear, roofToFloorPoint, houseArea, inArea, scaleRatio } from './geom.js';
 import { STANDARD_SCALES } from './pdf-extract.js';
 
 const $app = document.getElementById('app');
@@ -13,7 +13,7 @@ const FLOOR_TINT = '#0047c2';
 const NOTICE = 'Setting-out aid only. Vent positions on the roof plan are indicative. Check against the truss layout / designer before fixing.';
 
 // saved between visits (IndexedDB, this device only)
-let saved = { roof: null, floor: null, align: null, nudge: { x: 0, y: 0 }, opacity: 0.6, colour: true, flip: false, wallsOnly: true, cleanRoof: true, scaleOverride: { roof: null, floor: null } };
+let saved = { roof: null, floor: null, align: null, nudge: { x: 0, y: 0 }, opacity: 0.6, colour: true, flip: false, wallsOnly: true, cleanRoof: true, crop: true, scaleOverride: { roof: null, floor: null } };
 // loaded drawings: { doc, pages, page, canvas, scale, width, height, segs, statedScale, tinted }
 const dr = { roof: null, floor: null };
 let mode = 'view'; // view | pick-roof | pick-floor | move
@@ -92,20 +92,13 @@ function overlapBox() {
   return box.x1 > box.x0 && box.y1 > box.y0 ? box : { x0: 0, y0: 0, x1: f.width, y1: f.height };
 }
 
-/** Best first view: the house on the floor plan, found around the tapped corner. */
+/** Best first view: the house on the floor plan (every sizeable block of it, wings included). */
 function homeBox() { return flipBox(homeBoxUnflipped()); }
 function homeBoxUnflipped() {
-  const f = dr.floor;
-  if (!saved.align?.floorRef || !f) return overlapBox();
-  const seed = saved.align.floorRef;
-  let box = null;
-  for (const cell of [8, 14]) {
-    const b = regionAround(f.segs, f.width, f.height, seed, cell);
-    if (b && b.x1 - b.x0 > 0.12 * f.width && b.y1 - b.y0 > 0.12 * f.height) { box = b; break; }
-  }
-  if (!box) return overlapBox(); // nothing house-sized found around the corner: show the overlap
-  const m = 0.06 * Math.max(box.x1 - box.x0, box.y1 - box.y0);
-  return { x0: box.x0 - m, y0: box.y0 - m, x1: box.x1 + m, y1: box.y1 + m };
+  const u = dr.floor?.fit?.union;
+  if (!u || !(u.x1 > u.x0) || !(u.y1 > u.y0)) return overlapBox();
+  const m = 0.06 * Math.max(u.x1 - u.x0, u.y1 - u.y0);
+  return { x0: u.x0 - m, y0: u.y0 - m, x1: u.x1 + m, y1: u.y1 + m };
 }
 
 // Flip (opposite hand): mirror the whole overlay left-right about a vertical line through
@@ -127,16 +120,25 @@ function floorToRoof(x, y) {
   if (!al?.roofRef || !al?.floorRef) return { x: (x - n.x) / k, y: (y - n.y) / k };
   return { x: (x - n.x - al.floorRef.x) / k + al.roofRef.x, y: (y - n.y - al.floorRef.y) / k + al.roofRef.y };
 }
-/** Part of the roof sheet to keep: the house (found on the floor plan) plus a margin. */
-function roofRegion() {
+/**
+ * Roof linework worth drawing, in roof page points: the roof's own plan blocks plus wherever the
+ * floor plan's blocks fall once lined up (the roof can have wings or eaves beyond one's outline).
+ * null = draw everything (crop switched off, or nothing found).
+ */
+function roofArea() {
   const r = dr.roof;
-  if (!saved.align?.floorRef) return { x0: 0, y0: 0, x1: r.width, y1: r.height };
-  const b = homeBoxUnflipped();
-  const m = 0.12 * Math.max(b.x1 - b.x0, b.y1 - b.y0);
-  const a = floorToRoof(b.x0 - m, b.y0 - m);
-  const c = floorToRoof(b.x1 + m, b.y1 + m);
-  return { x0: Math.min(a.x, c.x), y0: Math.min(a.y, c.y), x1: Math.max(a.x, c.x), y1: Math.max(a.y, c.y) };
+  if (!saved.crop || !r?.area) return null;
+  const boxes = r.area.boxes.slice();
+  if (saved.align?.floorRef && dr.floor?.area) {
+    for (const b of dr.floor.area.boxes) {
+      const a = floorToRoof(b.x0, b.y0);
+      const c = floorToRoof(b.x1, b.y1);
+      boxes.push({ x0: Math.min(a.x, c.x), y0: Math.min(a.y, c.y), x1: Math.max(a.x, c.x), y1: Math.max(a.y, c.y) });
+    }
+  }
+  return { boxes };
 }
+const floorAreaOrNull = () => (saved.crop && dr.floor?.area ? dr.floor.area : null);
 
 // ---------------------------------------------------------------- drawing
 function drawPage(ctx, view, d, img, dpr, m0) {
@@ -184,7 +186,7 @@ const lightness = (hex) => rgb(hex).reduce((a, b) => a + b, 0) / 765;
  * keys. Markups (vent / PV boxes and their notes) are always kept.
  */
 function drawRoofClean(ctx, view, dpr) {
-  drawClean(ctx, view, dpr, { data: dr.roof.clean, toFloor: roofToFloor, region: roofRegion(), tint: ROOF_TINT, alpha: saved.opacity, k: roofRatio(), notes: true });
+  drawClean(ctx, view, dpr, { data: dr.roof.clean, toFloor: roofToFloor, area: roofArea(), tint: ROOF_TINT, alpha: saved.opacity, k: roofRatio(), notes: true });
 }
 
 /**
@@ -192,15 +194,12 @@ function drawRoofClean(ctx, view, dpr) {
  * measurements, keys, schedules or title block); room names are drawn by drawRooms.
  */
 function drawFloorClean(ctx, view, dpr) {
-  const b = homeBoxUnflipped();
-  const m = 0.04 * Math.max(b.x1 - b.x0, b.y1 - b.y0);
-  drawClean(ctx, view, dpr, { data: dr.floor.clean, toFloor: (x, y) => ({ x, y }), region: { x0: b.x0 - m, y0: b.y0 - m, x1: b.x1 + m, y1: b.y1 + m }, tint: FLOOR_TINT, alpha: 1, k: 1, notes: false });
+  drawClean(ctx, view, dpr, { data: dr.floor.clean, toFloor: (x, y) => ({ x, y }), area: floorAreaOrNull(), tint: FLOOR_TINT, alpha: 1, k: 1, notes: false });
 }
 
 function drawClean(ctx, view, dpr, o) {
   const { s, tx, ty } = view;
-  const reg = o.region;
-  const inReg = (x, y) => x >= reg.x0 && x <= reg.x1 && y >= reg.y0 && y <= reg.y1;
+  const inReg = (x, y) => inArea(o.area, x, y);
   const P = (x, y) => { const f = o.toFloor(x, y); return [fx(f.x) * s + tx, f.y * s + ty]; };
   ctx.save();
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -208,19 +207,24 @@ function drawClean(ctx, view, dpr, o) {
   ctx.lineCap = 'round';
   for (const p of o.data.paths) {
     const a = p.segs;
-    if (!p.markup) {
-      // skip linework outside the house area (sheet notes, keys, title block)
+    if (!p.markup && p.fill) {
+      // filled shapes (wall poche etc.): keep or drop as a whole
       let cx = 0, cy = 0;
       for (let i = 0; i < a.length; i += 2) { cx += a[i]; cy += a[i + 1]; }
       if (!inReg(cx / (a.length / 2), cy / (a.length / 2))) continue;
     }
     ctx.beginPath();
     let lx = NaN, ly = NaN;
+    let any = false;
     for (let i = 0; i < a.length; i += 4) {
+      // lines are judged one by one: keys, schedules and notes drop out, the plan never does
+      if (!p.markup && !p.fill && !inReg((a[i] + a[i + 2]) / 2, (a[i + 1] + a[i + 3]) / 2)) continue;
       if (a[i] !== lx || a[i + 1] !== ly) ctx.moveTo(...P(a[i], a[i + 1]));
       ctx.lineTo(...P(a[i + 2], a[i + 3]));
       lx = a[i + 2]; ly = a[i + 3];
+      any = true;
     }
+    if (!any) continue;
     // coloured items (pink vent boxes, yellow PV areas) keep their colour; black/grey linework
     // takes the roof colour. White fills are text backgrounds and are skipped.
     if (p.fill && p.fillColor !== '#ffffff') {
@@ -312,6 +316,16 @@ async function loadSlot(slot, info) {
   const pageNo = Math.min(info.page || 1, doc.numPages);
   const p = await loadPage(doc, pageNo);
   dr[slot] = { ...p, doc, pages: doc.numPages, page: pageNo, name: info.name, tinted: tint(p.canvas, slot === 'roof' ? ROOF_TINT : FLOOR_TINT) };
+  // Plan areas, found once per drawing: `area` (generous) decides which lines count as the plan
+  // rather than keys / schedules; `fit` (tight) is the first view. Blocks holding room names
+  // are always kept, so a separate wing is never lost.
+  // Worked out on the line work with dimensions and the sheet border already removed: dimension
+  // lines are what join a house to the notes and keys around it.
+  const plan = [];
+  for (const q of p.clean?.paths || []) if (!q.markup) for (const v of q.segs) plan.push(v);
+  const planSegs = plan.length ? Float64Array.from(plan) : p.segs;
+  dr[slot].area = houseArea(planSegs, p.width, p.height, p.rooms || []);
+  dr[slot].fit = houseArea(planSegs, p.width, p.height, p.rooms || [], { cell: 10, gap: 2, pad: 0 });
 }
 
 async function choose(slot) {
@@ -481,6 +495,7 @@ function render() {
     scaleBox(),
     toggle('walls', dr.floor.wallSegs ? 'Floor plan: walls and room names only' : 'Floor plan: hide measurements, keys and notes', saved.wallsOnly, (e) => { saved.wallsOnly = e.target.checked; save(); viewer.redraw(); }),
     toggle('cleanroof', 'Roof plan: hide measurements and sheet notes', saved.cleanRoof, (e) => { saved.cleanRoof = e.target.checked; save(); render(); }),
+    toggle('crop', 'Hide keys, schedules and sheet notes', saved.crop, (e) => { saved.crop = e.target.checked; save(); viewer.redraw(); }),
     toggle('colour', 'Colour the drawings (roof red, floor blue)', saved.colour, (e) => { saved.colour = e.target.checked; save(); render(); }),
     saved.nudge.x || saved.nudge.y ? h('button', { class: 'small linkbtn', onclick: () => { saved.nudge = { x: 0, y: 0 }; save(); viewer.redraw(); render(); } }, ico('undo'), 'Undo roof moves') : null) : null;
 
@@ -520,7 +535,7 @@ function render() {
 
 // ---------------------------------------------------------------- start
 async function boot() {
-  window.__roofline = { dr, saved: () => saved, viewer: () => viewer, roofRatio: () => roofRatio(), roofToFloor: (x, y) => roofToFloor(x, y) }; // used by automated tests
+  window.__roofline = { dr, saved: () => saved, viewer: () => viewer, roofRatio: () => roofRatio(), roofToFloor: (x, y) => roofToFloor(x, y), homeBox: () => homeBox() }; // used by automated tests
   try { saved = { ...saved, ...(await db.kvGet('overlay', {})) }; } catch { /* first run */ }
   for (const slot of ['roof', 'floor']) {
     if (!saved[slot]) continue;

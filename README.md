@@ -37,6 +37,12 @@ drawn (vent boxes, tile vents, notes). Optional:
 The two drawings and the line-up are remembered on the phone, so it opens where you left
 off. Choose a different PDF at any time with **Change**.
 
+Keys, schedules and sheet notes are hidden by finding the plan itself: the separate blocks of
+linework on the sheet (once dimensions and the sheet border are removed) are kept when they are
+at least 30% the size of the largest block or contain a room name, so a spread-out building
+with wings, or a small store wing, is never cut. The "Hide keys, schedules and sheet notes"
+switch turns this off if you ever want to see everything on the sheet.
+
 Measurements are removed automatically from both drawings, whatever the drawing style:
 every measurement number (e.g. 5100, 955 int.) marks its dimension line, which is removed
 with its extension lines and end marks (ticks, arrows, dots); dimension ticks are also
@@ -80,6 +86,7 @@ npm test             # unit tests
 npm run e2e          # full run in headless Chromium at iPhone size (synthetic drawings)
 npm run e2e:real     # same, on real drawings in tests/fixtures/real/ (git-ignored)
 npm run e2e:scales   # roof at 1:100 over floor at 1:50 (three ways the scale can be given)
+npm run e2e:spread   # spread-out bungalow: wings separated by gaps, nothing may be cut off
 npm run build:sw     # after changing app files, so phones pick up the new version
 ```
 

@@ -183,3 +183,45 @@ test('dimension measurement: the measured scale agrees with the stated scale on 
   }
   assert.ok(floor.drawingScale.count >= 20, 'many dimensions measured on the floor plan');
 });
+
+// ---------- which linework is "the plan" (never cut a spread-out building) ----------
+import { houseArea, inArea } from '../js/geom.js';
+// line work as the app sees it: dimensions and sheet border already removed
+const planSegs = (g) => { const o = []; for (const p of g.clean.paths) if (!p.markup) for (const v of p.segs) o.push(v); return Float64Array.from(o); };
+
+test('spread-out plan: every wing is kept (even a small one with a room name), the key block is not', async () => {
+  const f = await geometry(path.join(SYN, 'bungalow_floor.pdf'));
+  const segs = planSegs(f);
+  const area = houseArea(segs, f.width, f.height, f.rooms);
+  const MMPT = 72 / 25.4 / 50;
+  const pt = (xmm, ymm) => [120 + xmm * MMPT, 841.89 - (640 - ymm * MMPT)];
+  for (const [name, x, y] of [['wing A', 3500, 2500], ['wing B', 10700, 4000], ['small store wing', 2900, 7350]]) {
+    const [px, py] = pt(x, y);
+    assert.ok(inArea(area, px, py), `${name} inside the plan area`);
+  }
+  assert.ok(!inArea(area, 1050, 440), 'key block outside the plan area');
+  // the tight first view covers all three wings and not the key
+  const fit = houseArea(segs, f.width, f.height, f.rooms, { cell: 10, gap: 2, pad: 0 }).union;
+  const [bx, by] = pt(13200, 8100);
+  assert.ok(fit.x1 >= bx - 1 && fit.y1 >= by - 1, `fit covers the far corner (${JSON.stringify(fit)})`);
+  assert.ok(fit.x1 < 940, 'fit leaves out the key');
+});
+
+test('spread-out roof plan: all roof wings are kept', async () => {
+  const r = await geometry(path.join(SYN, 'bungalow_roof.pdf'));
+  const area = houseArea(planSegs(r), r.width, r.height, []);
+  const MMPT = 72 / 25.4 / 50;
+  for (const [x, y] of [[3500, 2500], [10700, 4000], [2900, 7350]]) assert.ok(inArea(area, 160 + x * MMPT, 841.89 - (600 - y * MMPT)));
+});
+
+test('REAL: the plan area covers the whole house and drops the key block', { skip: !have && 'no real drawings' }, async () => {
+  const floor = await geometry(real('ellerton_first_floor.pdf'));
+  const roof = await geometry(real('ellerton_roof.pdf'));
+  const fa = houseArea(planSegs(floor), floor.width, floor.height, floor.rooms);
+  for (const [x, y] of [[430, 110], [740, 110], [430, 698], [740, 698], [585, 400]]) assert.ok(inArea(fa, x, y), `floor ${x},${y}`);
+  assert.ok(!inArea(fa, 150, 400), 'electrical key block on the left is outside');
+  const ra = houseArea(planSegs(roof), roof.width, roof.height, []);
+  for (const [x, y] of [[300, 70], [690, 70], [300, 712], [690, 712], [550, 400]]) assert.ok(inArea(ra, x, y), `roof ${x},${y}`);
+  const fit = houseArea(planSegs(floor), floor.width, floor.height, floor.rooms, { cell: 10, gap: 2, pad: 0 }).union;
+  assert.ok(fit.x0 <= 425 && fit.x1 >= 743 && fit.y0 <= 106 && fit.y1 >= 700 && fit.x1 - fit.x0 < 0.5 * floor.width, JSON.stringify(fit));
+});

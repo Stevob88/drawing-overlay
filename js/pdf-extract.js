@@ -1,6 +1,6 @@
 // Reads line geometry from a PDF page so taps can snap to real corners and line
 // crossings, and finds the drawing's stated scale (e.g. "1:50"). Works in browser and Node.
-import { mul, apply } from './geom.js';
+import { mul, apply, isSheetBorder } from './geom.js';
 
 function hex(rgb) {
   if (typeof rgb === 'string') return rgb.toLowerCase();
@@ -245,7 +245,7 @@ export async function pageGeometry(pdfjs, page) {
     width: viewport.width, height: viewport.height, segs, statedScale: scale, drawingScale,
     wallSegs: wallLayer(noDims, drawingScale?.n || 50), rooms: roomLabels(tc.items, viewport.transform),
     clean: {
-      paths: noDims.map((p) => ({ segs: Float64Array.from(p.segs), stroke: p.stroke, fill: p.fill, color: p.color, fillColor: p.fillColor, lw: p.lw, dash: p.dash, markup: p.markup })),
+      paths: noDims.map((p) => ({ segs: Float64Array.from(withoutBorder(p, viewport.width, viewport.height)), stroke: p.stroke, fill: p.fill, color: p.color, fillColor: p.fillColor, lw: p.lw, dash: p.dash, markup: p.markup })),
       notes: [...noteLabels(tc.items, viewport.transform), ...(await markupLabels(page, viewport))],
     },
   };
@@ -359,6 +359,16 @@ export function withoutLabelledDimensions(paths, labels, scaleN = 50) {
     for (let i = 0; i < p.segs.length; i += 4) if (!drop[pi][i / 4]) keep.push(p.segs[i], p.segs[i + 1], p.segs[i + 2], p.segs[i + 3]);
     if (keep.length) out.push({ ...p, segs: keep });
   });
+  return out;
+}
+
+/** A path's segments minus the sheet border / title-block frame (markups are never touched). */
+function withoutBorder(p, width, height) {
+  if (p.markup) return p.segs;
+  const out = [];
+  for (let i = 0; i < p.segs.length; i += 4) {
+    if (!isSheetBorder(p.segs[i], p.segs[i + 1], p.segs[i + 2], p.segs[i + 3], width, height)) out.push(p.segs[i], p.segs[i + 1], p.segs[i + 2], p.segs[i + 3]);
+  }
   return out;
 }
 
