@@ -43,13 +43,13 @@ async function run(label, ctxOpts) {
     for (let i = 0; i < d.length; i += 4) { if (d[i] - d[i + 1] > 50 && d[i] - d[i + 2] > 50 && Math.abs(d[i + 1] - d[i + 2]) < 40) red++; else if (d[i + 2] - d[i] > 60) blue++; }
     return { red, blue };
   });
-  for (const [btn, wantRed, wantBlue] of [['Roof', true, false], ['Floor', false, true], ['Both', true, true]]) {
-    await page.getByRole('button', { name: btn, exact: true }).click();
+  for (const [btn, wantRed, wantBlue] of [['Roof plan', true, false], ['Roof plan', true, true], ['Floor plan', false, true], ['Roof plan', true, false], ['Roof plan', true, true]]) {
+    await page.locator('.showswitch button', { hasText: btn }).click();
     await page.waitForTimeout(200);
     const n = await ink();
     console.log(`  show ${btn}: red ${n.red}, blue ${n.blue}`);
     if ((n.red > 500) !== wantRed || (n.blue > 500) !== wantBlue) fail(`show ${btn} wrong`);
-    await page.locator('.canvaswrap').screenshot({ path: path.join(OUT, `${label}-show-${btn}.png`) });
+    await page.locator('.canvaswrap').screenshot({ path: path.join(OUT, `${label}-show-${btn.replace(' ', '')}-${n.red > 500 ? 'R' : ''}${n.blue > 500 ? 'F' : ''}.png`) });
   }
 
   // download (computer) / share sheet (iPhone)

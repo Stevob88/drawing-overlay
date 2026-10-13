@@ -605,9 +605,11 @@ function render() {
   const picking = mode === 'pick-roof' || mode === 'pick-floor';
   const hasDrawing = both || dr.roof || dr.floor;
 
-  const seg = (val, label, dot) => h('button', { class: show === val ? 'on' : '', 'aria-pressed': String(show === val), onclick: () => { show = val; render(); } }, dot && saved.colour ? h('i', { class: `dot ${dot}` }) : null, label);
-  const chips = both && !picking ? h('div', { class: 'chips showswitch', role: 'group', 'aria-label': 'Show' },
-    seg('both', 'Both'), seg('roof', 'Roof', 'roof'), seg('floor', 'Floor', 'floor')) : null;
+  // Tap a plan to show only that plan; tap it again to show both.
+  const onlyBtn = (val, label) => h('button', { class: `chip ${show === val ? 'on' : show !== 'both' ? 'off' : ''}`, 'aria-pressed': String(show === val), title: show === val ? 'Show both plans' : `Show only the ${label.toLowerCase()}`, onclick: () => { show = show === val ? 'both' : val; render(); } },
+    saved.colour ? h('i', { class: `dot ${val}` }) : null, label, show === val ? h('span', { class: 'only' }, 'only') : null);
+  const chips = both && !picking ? h('div', { class: 'chips showswitch', role: 'group', 'aria-label': 'Show only one plan' },
+    onlyBtn('floor', 'Floor plan'), onlyBtn('roof', 'Roof plan')) : null;
 
   const tools = both ? (picking
     ? h('div', { class: 'tools two a-tools' },
